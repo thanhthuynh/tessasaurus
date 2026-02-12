@@ -23,7 +23,7 @@ struct OnboardingView: View {
     @State private var titleOpacity: CGFloat = 1.0
     @State private var messageOpacity: CGFloat = 0.0
     @State private var canAdvance = true
-    @State private var slideOffset: CGFloat = 0
+    @State private var dismissOpacity: CGFloat = 1.0
     @State private var gradientOffset: CGFloat = 0
     @State private var transitionStarBrightness: CGFloat = 0
 
@@ -45,7 +45,8 @@ struct OnboardingView: View {
                     transitionScreen(size: geometry.size)
                 }
             }
-            .offset(y: slideOffset)
+            .opacity(dismissOpacity)
+            .allowsHitTesting(dismissOpacity > 0)
         }
         .ignoresSafeArea()
     }
@@ -75,7 +76,7 @@ struct OnboardingView: View {
             guard canAdvance else { return }
             canAdvance = false
 
-            let duration = reduceMotion ? 0.01 : 0.6
+            let duration = reduceMotion ? 0.01 : 0.8
             withAnimation(.easeOut(duration: duration)) {
                 titleOpacity = 0
             }
@@ -83,7 +84,7 @@ struct OnboardingView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
                 phase = .messages(0)
                 messageOpacity = 0
-                let fadeIn = reduceMotion ? 0.01 : 0.5
+                let fadeIn = reduceMotion ? 0.01 : 0.9
                 withAnimation(.easeIn(duration: fadeIn)) {
                     messageOpacity = 1
                 }
@@ -115,7 +116,7 @@ struct OnboardingView: View {
 
             HapticService.shared.lightTap()
 
-            let fadeOut = reduceMotion ? 0.01 : 0.4
+            let fadeOut = reduceMotion ? 0.01 : 0.7
             withAnimation(.easeOut(duration: fadeOut)) {
                 messageOpacity = 0
             }
@@ -124,7 +125,7 @@ struct OnboardingView: View {
                 let nextIndex = index + 1
                 if nextIndex < totalMessages {
                     phase = .messages(nextIndex)
-                    let fadeIn = reduceMotion ? 0.01 : 0.5
+                    let fadeIn = reduceMotion ? 0.01 : 1.0
                     withAnimation(.easeIn(duration: fadeIn)) {
                         messageOpacity = 1
                     }
@@ -178,7 +179,6 @@ struct OnboardingView: View {
                     TessaColors.primary.opacity(0.8),
                     TessaColors.nebula,
                     TessaColors.deepSpace,
-                    Color.clear,
                 ],
                 startPoint: .bottom,
                 endPoint: .top
@@ -213,18 +213,21 @@ struct OnboardingView: View {
             }
         }
 
-        // Step 3: Slide whole view up off screen (3.3s)
-        let slideDelay = reduceMotion ? 0.02 : 3.3
-        DispatchQueue.main.asyncAfter(deadline: .now() + slideDelay) {
-            hasCompletedOnboarding = true
+        // Step 3: Dissolve out (3.3s) — crossfade into matching starfield behind
+        let dissolveDelay = reduceMotion ? 0.02 : 3.3
+        let dissolveDuration = reduceMotion ? 0.01 : 1.5
+        DispatchQueue.main.asyncAfter(deadline: .now() + dissolveDelay) {
+            // Signal ConstellationCanvasView to begin fan-out
+            NotificationCenter.default.post(name: .onboardingWillDismiss, object: nil)
             HapticService.shared.success()
 
-            if reduceMotion {
-                slideOffset = -screenHeight
-            } else {
-                withAnimation(.spring(response: 1.2, dampingFraction: 0.85)) {
-                    slideOffset = -screenHeight
-                }
+            withAnimation(.easeOut(duration: dissolveDuration)) {
+                dismissOpacity = 0
+            }
+
+            // Remove from hierarchy after dissolve completes (view already invisible)
+            DispatchQueue.main.asyncAfter(deadline: .now() + dissolveDuration) {
+                hasCompletedOnboarding = true
             }
         }
     }

@@ -15,11 +15,9 @@ struct TessasaurusApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if hasCompletedOnboarding {
+            ZStack {
                 ContentView()
-            } else {
-                ZStack {
-                    ContentView()
+                if !hasCompletedOnboarding {
                     OnboardingView()
                 }
             }
@@ -109,4 +107,5 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
 
 extension Notification.Name {
     static let photosDidUpdate = Notification.Name("photosDidUpdate")
+    static let onboardingWillDismiss = Notification.Name("onboardingWillDismiss")
 }

@@ -94,7 +94,8 @@ struct ConstellationCanvasView: View {
             .simultaneousGesture(magnifyGesture(anchor: viewCenter))
             .onAppear {
                 recomputeLayout()
-                if !hasFannedOut && !photos.isEmpty {
+                let onboardingDone = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
+                if onboardingDone && !hasFannedOut && !photos.isEmpty {
                     performFanOut()
                 }
             }
@@ -104,8 +105,18 @@ struct ConstellationCanvasView: View {
             }
             .onChange(of: photos.count) { oldCount, newCount in
                 recomputeLayout()
-                if oldCount == 0 && newCount > 0 && !hasFannedOut {
+                let onboardingDone = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
+                if onboardingDone && oldCount == 0 && newCount > 0 && !hasFannedOut {
                     performFanOut()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .onboardingWillDismiss)) { _ in
+                guard !hasFannedOut else { return }
+                // Delay 0.5s so fan-out starts ~33% into the 1.5s dissolve
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    if !hasFannedOut {
+                        performFanOut()
+                    }
                 }
             }
         }
