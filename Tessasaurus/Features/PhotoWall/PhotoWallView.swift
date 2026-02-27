@@ -19,6 +19,7 @@ struct PhotoWallView: View {
                     StarfieldBackground(canvasOffset: .zero, canvasScale: 1.0)
                     emptyState
                 }
+                .ignoresSafeArea()
             } else {
                 constellationCanvas
             }
@@ -55,10 +56,8 @@ struct PhotoWallView: View {
         }
         .task {
             await viewModel.loadPhotos()
-            // Preload images into memory cache
-            for photo in viewModel.photos where viewModel.image(for: photo) == nil {
-                let _ = await viewModel.loadImageAsync(for: photo)
-            }
+            // Preload images into memory cache concurrently
+            await viewModel.preloadImages()
         }
         .sheet(isPresented: $showAddPhotoSheet) {
             AddPhotoSheet(viewModel: viewModel)

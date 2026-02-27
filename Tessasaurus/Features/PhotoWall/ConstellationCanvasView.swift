@@ -23,6 +23,7 @@ struct ConstellationCanvasView: View {
     @State private var cachedEdges: [ConstellationEdge] = []
 
     // Drag tracking for velocity
+    @State private var dragStartOffset: CGPoint? = nil
     @State private var lastDragPosition: CGPoint = .zero
     @State private var lastDragTime: Date = .now
     @State private var dragVelocity: CGPoint = .zero
@@ -120,6 +121,7 @@ struct ConstellationCanvasView: View {
                 }
             }
         }
+        .ignoresSafeArea()
         .clipped()
     }
 
@@ -185,6 +187,11 @@ struct ConstellationCanvasView: View {
                 momentumController?.stop()
                 momentumController = nil
 
+                // Capture starting offset on first event
+                if dragStartOffset == nil {
+                    dragStartOffset = canvasOffset
+                }
+
                 // Calculate velocity
                 let now = Date()
                 let dt = now.timeIntervalSince(lastDragTime)
@@ -197,15 +204,17 @@ struct ConstellationCanvasView: View {
                 lastDragPosition = value.location
                 lastDragTime = now
 
+                // Fixed: base offset from drag START, not current (cumulative) offset
                 let newOffset = CGPoint(
-                    x: canvasOffset.x + value.translation.width,
-                    y: canvasOffset.y + value.translation.height
+                    x: dragStartOffset!.x + value.translation.width,
+                    y: dragStartOffset!.y + value.translation.height
                 )
 
                 let bounds = scaledBounds()
                 canvasOffset = applyRubberBand(offset: newOffset, bounds: bounds)
             }
             .onEnded { value in
+                dragStartOffset = nil
                 let bounds = scaledBounds()
 
                 // Check if beyond bounds - spring back
@@ -220,14 +229,14 @@ struct ConstellationCanvasView: View {
 
                 // Apply momentum
                 let velocity = dragVelocity
-                guard abs(velocity.x) > 50 || abs(velocity.y) > 50 else { return }
+                guard abs(velocity.x) > 100 || abs(velocity.y) > 100 else { return }
 
                 let controller = MomentumController()
                 momentumController = controller
 
                 controller.start(
                     velocity: velocity,
-                    decayRate: 0.95,
+                    decayRate: 0.93,
                     onUpdate: { delta in
                         let newOffset = CGPoint(
                             x: canvasOffset.x + delta.x,

@@ -1,0 +1,14 @@
+#!/bin/bash
+set -euo pipefail
+
+PROJECT="Tessasaurus.xcodeproj"
+SCHEME="Tessasaurus"
+
+echo "==> Cleaning derived data..."
+rm -rf build
+xcodebuild -project "${PROJECT}" -scheme "${SCHEME}" clean 2>/dev/null || true
+
+echo "==> Opening project in Xcode..."
+open "${PROJECT}"
+
+echo "==> Done. Clean slate ready — select a simulator in Xcode and run."

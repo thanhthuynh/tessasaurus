@@ -17,6 +17,7 @@ final class PhotoWallViewModel {
     var errorMessage: String?
     var showError = false
     var isUploaderMode = false
+    private(set) var loadedImageIDs: Set<UUID> = []
 
     private let cloudService = CloudKitPhotoService.shared
     private let storageService = PhotoStorageService.shared
@@ -28,6 +29,8 @@ final class PhotoWallViewModel {
     init() {
         isUploaderMode = UserDefaults.standard.bool(forKey: uploaderModeKey)
         loadCachedPhotos()
+        // Start pre-warming memory cache from disk immediately
+        Task { await preloadImages() }
     }
 
     // MARK: - Public Methods
@@ -40,7 +43,9 @@ final class PhotoWallViewModel {
             // Check iCloud account status
             let status = try await cloudService.checkAccountStatus()
             guard status == .available else {
-                throw cloudKitError(for: status)
+                // No iCloud account — silently fall back to cached photos
+                isLoading = false
+                return
             }
 
             // Fetch from CloudKit
@@ -80,6 +85,7 @@ final class PhotoWallViewModel {
 
                 // Cache the image
                 cacheService.setImage(image, forKey: photo.id.uuidString)
+                loadedImageIDs.insert(photo.id)
 
             } catch {
                 handleError(error)
@@ -113,7 +119,9 @@ final class PhotoWallViewModel {
     }
 
     func image(for photo: Photo) -> UIImage? {
-        cacheService.image(forKey: photo.id.uuidString)
+        // Touch observed set so SwiftUI re-renders when new images load
+        _ = loadedImageIDs.contains(photo.id)
+        return cacheService.image(forKey: photo.id.uuidString)
     }
 
     func loadImageAsync(for photo: Photo) async -> UIImage? {
@@ -134,10 +142,22 @@ final class PhotoWallViewModel {
                    let image = self.storageService.loadImage(fileName: fileName) {
                     DispatchQueue.main.async {
                         self.cacheService.setImage(image, forKey: photo.id.uuidString)
+                        self.loadedImageIDs.insert(photo.id)
                     }
                     continuation.resume(returning: image)
                 } else {
                     continuation.resume(returning: nil)
+                }
+            }
+        }
+    }
+
+    func preloadImages() async {
+        let unloaded = photos.filter { image(for: $0) == nil }
+        await withTaskGroup(of: Void.self) { group in
+            for photo in unloaded {
+                group.addTask {
+                    let _ = await self.loadImageAsync(for: photo)
                 }
             }
         }
