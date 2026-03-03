@@ -30,7 +30,7 @@ final class PhotoWallViewModel {
         isUploaderMode = UserDefaults.standard.bool(forKey: uploaderModeKey)
         loadCachedPhotos()
         // Start pre-warming memory cache from disk immediately
-        Task { await preloadImages() }
+        Task { [weak self] in await self?.preloadImages() }
     }
 
     // MARK: - Public Methods
@@ -131,33 +131,46 @@ final class PhotoWallViewModel {
         }
 
         // Check local storage on background thread
-        return await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                guard let self else {
-                    continuation.resume(returning: nil)
-                    return
-                }
+        let fileName = photo.localFileName
+        let storageService = self.storageService
+        let diskImage: UIImage? = await Task.detached(priority: .userInitiated) {
+            guard let fileName else { return nil }
+            return storageService.loadImage(fileName: fileName)
+        }.value
 
-                if let fileName = photo.localFileName,
-                   let image = self.storageService.loadImage(fileName: fileName) {
-                    DispatchQueue.main.async {
-                        self.cacheService.setImage(image, forKey: photo.id.uuidString)
-                        self.loadedImageIDs.insert(photo.id)
-                    }
-                    continuation.resume(returning: image)
-                } else {
-                    continuation.resume(returning: nil)
-                }
-            }
+        if let diskImage {
+            cacheService.setImage(diskImage, forKey: photo.id.uuidString)
+            loadedImageIDs.insert(photo.id)
+            return diskImage
         }
+
+        // Fallback: fetch from CloudKit
+        do {
+            if let cloudImage = try await cloudService.fetchImageForPhoto(photo) {
+                cacheService.setImage(cloudImage, forKey: photo.id.uuidString)
+                loadedImageIDs.insert(photo.id)
+                return cloudImage
+            }
+        } catch {
+            // Non-fatal — photo stays as placeholder
+        }
+
+        return nil
     }
 
     func preloadImages() async {
         let unloaded = photos.filter { image(for: $0) == nil }
-        await withTaskGroup(of: Void.self) { group in
-            for photo in unloaded {
-                group.addTask {
-                    let _ = await self.loadImageAsync(for: photo)
+        let maxConcurrent = 4
+
+        for batch in stride(from: 0, to: unloaded.count, by: maxConcurrent) {
+            let end = min(batch + maxConcurrent, unloaded.count)
+            let slice = unloaded[batch..<end]
+
+            await withTaskGroup(of: Void.self) { group in
+                for photo in slice {
+                    group.addTask {
+                        _ = await self.loadImageAsync(for: photo)
+                    }
                 }
             }
         }
@@ -170,6 +183,7 @@ final class PhotoWallViewModel {
 
     func refresh() async {
         await loadPhotos()
+        await preloadImages()
     }
 
     // MARK: - Private Methods

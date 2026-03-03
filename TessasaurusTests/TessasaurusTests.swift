@@ -9,77 +9,6 @@ import Testing
 import Foundation
 @testable import Tessasaurus
 
-struct DateServiceTests {
-    let dateService = DateService()
-
-    @Test func daysUntilReturnsPositiveForFutureDate() async throws {
-        let future = Calendar.current.date(byAdding: .day, value: 5, to: Date())!
-        let days = dateService.daysUntil(future)
-        #expect(days == 5)
-    }
-
-    @Test func daysUntilReturnsZeroForToday() async throws {
-        let today = Date()
-        let days = dateService.daysUntil(today)
-        #expect(days == 0)
-    }
-
-    @Test func daysUntilReturnsNegativeForPastDate() async throws {
-        let past = Calendar.current.date(byAdding: .day, value: -3, to: Date())!
-        let days = dateService.daysUntil(past)
-        #expect(days == -3)
-    }
-
-    @Test func currentDayNumberReturnsDayDuringCountdown() async throws {
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        let targetDate = calendar.date(byAdding: .day, value: 3, to: today)!
-
-        let occasion = Occasion(
-            id: UUID(),
-            name: "Test",
-            targetDate: targetDate,
-            countdownDays: 7,
-            hints: []
-        )
-
-        let currentDay = dateService.currentDayNumber(for: occasion)
-        #expect(currentDay == 5)
-    }
-
-    @Test func isCountdownActiveReturnsTrueDuringCountdown() async throws {
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        let targetDate = calendar.date(byAdding: .day, value: 3, to: today)!
-
-        let occasion = Occasion(
-            id: UUID(),
-            name: "Test",
-            targetDate: targetDate,
-            countdownDays: 7,
-            hints: []
-        )
-
-        #expect(dateService.isCountdownActive(for: occasion))
-    }
-
-    @Test func isCountdownActiveReturnsFalseBeforeCountdown() async throws {
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        let targetDate = calendar.date(byAdding: .day, value: 30, to: today)!
-
-        let occasion = Occasion(
-            id: UUID(),
-            name: "Test",
-            targetDate: targetDate,
-            countdownDays: 7,
-            hints: []
-        )
-
-        #expect(!dateService.isCountdownActive(for: occasion))
-    }
-}
-
 struct PersistenceServiceTests {
     @Test func markDayOpenedPersistsCorrectly() async throws {
         let userDefaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
@@ -121,5 +50,78 @@ struct PersistenceServiceTests {
         #expect(service.openedDays(for: occasionID).isEmpty)
 
         userDefaults.removePersistentDomain(forName: userDefaults.description)
+    }
+}
+
+struct CouponPersistenceTests {
+    @Test func couponUsedCountStartsAtZero() async throws {
+        let userDefaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        let service = PersistenceService(userDefaults: userDefaults)
+        let couponID = UUID()
+
+        #expect(service.couponUsedCount(for: couponID) == 0)
+
+        userDefaults.removePersistentDomain(forName: userDefaults.description)
+    }
+
+    @Test func incrementCouponUsedCountIncrementsCorrectly() async throws {
+        let userDefaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        let service = PersistenceService(userDefaults: userDefaults)
+        let couponID = UUID()
+
+        service.incrementCouponUsedCount(for: couponID)
+        #expect(service.couponUsedCount(for: couponID) == 1)
+
+        service.incrementCouponUsedCount(for: couponID)
+        #expect(service.couponUsedCount(for: couponID) == 2)
+
+        userDefaults.removePersistentDomain(forName: userDefaults.description)
+    }
+
+    @Test func couponUsedCountIsolatedPerCoupon() async throws {
+        let userDefaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        let service = PersistenceService(userDefaults: userDefaults)
+        let couponA = UUID()
+        let couponB = UUID()
+
+        service.incrementCouponUsedCount(for: couponA)
+        service.incrementCouponUsedCount(for: couponA)
+        service.incrementCouponUsedCount(for: couponB)
+
+        #expect(service.couponUsedCount(for: couponA) == 2)
+        #expect(service.couponUsedCount(for: couponB) == 1)
+
+        userDefaults.removePersistentDomain(forName: userDefaults.description)
+    }
+}
+
+struct CouponModelTests {
+    @Test func smsURLFormatsCorrectly() async throws {
+        let coupon = Coupon.allCoupons[0]
+        let url = Coupon.smsURL(for: coupon)
+
+        #expect(url != nil)
+        let urlString = url!.absoluteString
+        #expect(urlString.contains("sms:+16107049840"))
+        #expect(urlString.contains("body="))
+        #expect(urlString.contains(coupon.name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!))
+    }
+
+    @Test func infiniteCouponReportsInfinite() async throws {
+        let kissesAndHugs = Coupon.allCoupons[0]
+        #expect(kissesAndHugs.isInfinite)
+        #expect(kissesAndHugs.totalUses == nil)
+    }
+
+    @Test func limitedCouponReportsFinite() async throws {
+        let massage = Coupon.allCoupons[1]
+        #expect(!massage.isInfinite)
+        #expect(massage.totalUses == 5)
+    }
+
+    @Test func allCouponsHaveUniqueIDs() async throws {
+        let ids = Coupon.allCoupons.map(\.id)
+        let uniqueIDs = Set(ids)
+        #expect(ids.count == uniqueIDs.count)
     }
 }

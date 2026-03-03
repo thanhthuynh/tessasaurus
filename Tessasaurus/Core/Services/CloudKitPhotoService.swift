@@ -124,6 +124,21 @@ final class CloudKitPhotoService {
         )
     }
 
+    // MARK: - Fetch Single Image
+
+    func fetchImageForPhoto(_ photo: Photo) async throws -> UIImage? {
+        guard let recordName = photo.cloudRecordID else { return nil }
+        let recordID = CKRecord.ID(recordName: recordName)
+        let record = try await database.record(for: recordID)
+        guard let asset = record["image"] as? CKAsset,
+              let fileURL = asset.fileURL else { return nil }
+        let imageData = try Data(contentsOf: fileURL)
+        guard let image = UIImage(data: imageData) else { return nil }
+        let fileName = photo.localFileName ?? "\(photo.id.uuidString).jpg"
+        try PhotoStorageService.shared.saveImage(image, fileName: fileName)
+        return image
+    }
+
     // MARK: - Delete
 
     func deletePhoto(_ photo: Photo) async throws {

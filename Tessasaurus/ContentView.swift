@@ -8,17 +8,17 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var selectedTab = 1
+    @State private var selectedTab = 0
     @State private var showTabBar = true
 
     var body: some View {
         ZStack(alignment: .bottom) {
             ZStack {
-                HomeView()
+                PhotoWallView(showTabBar: $showTabBar)
                     .opacity(selectedTab == 0 ? 1 : 0)
                     .zIndex(selectedTab == 0 ? 1 : 0)
 
-                PhotoWallView(showTabBar: $showTabBar)
+                CouponsView()
                     .opacity(selectedTab == 1 ? 1 : 0)
                     .zIndex(selectedTab == 1 ? 1 : 0)
             }

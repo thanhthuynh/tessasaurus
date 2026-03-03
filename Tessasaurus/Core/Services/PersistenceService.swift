@@ -40,4 +40,19 @@ final class PersistenceService {
         let key = "\(openedBoxesKey)_\(occasionID.uuidString)"
         userDefaults.removeObject(forKey: key)
     }
+
+    // MARK: - Coupon Persistence
+
+    private let couponUsedKey = "couponUsedCount"
+
+    func couponUsedCount(for couponID: UUID) -> Int {
+        let key = "\(couponUsedKey)_\(couponID.uuidString)"
+        return userDefaults.integer(forKey: key)
+    }
+
+    func incrementCouponUsedCount(for couponID: UUID) {
+        let key = "\(couponUsedKey)_\(couponID.uuidString)"
+        let current = userDefaults.integer(forKey: key)
+        userDefaults.set(current + 1, forKey: key)
+    }
 }

@@ -11,8 +11,8 @@ struct FloatingTabBar: View {
     private let haptics = HapticService.shared
 
     private let tabs: [(icon: String, label: String)] = [
-        ("heart.fill", "Home"),
-        ("sparkles", "Photos")
+        ("sparkles", "Photos"),
+        ("ticket.fill", "Coupons")
     ]
 
     var body: some View {

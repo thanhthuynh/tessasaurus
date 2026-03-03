@@ -12,11 +12,35 @@ final class PhotoStorageService {
     private let photosDirectory: URL
 
     private init() {
-        let cacheDirectory = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        photosDirectory = cacheDirectory.appendingPathComponent("Photos", isDirectory: true)
+        let documentsDirectory = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
+        photosDirectory = documentsDirectory.appendingPathComponent("Photos", isDirectory: true)
 
         if !fileManager.fileExists(atPath: photosDirectory.path) {
             try? fileManager.createDirectory(at: photosDirectory, withIntermediateDirectories: true)
+        }
+
+        migrateFromCachesIfNeeded()
+    }
+
+    private func migrateFromCachesIfNeeded() {
+        let cacheDirectory = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let oldDirectory = cacheDirectory.appendingPathComponent("Photos", isDirectory: true)
+
+        guard fileManager.fileExists(atPath: oldDirectory.path) else { return }
+
+        if let files = try? fileManager.contentsOfDirectory(at: oldDirectory, includingPropertiesForKeys: nil) {
+            for file in files {
+                let destination = photosDirectory.appendingPathComponent(file.lastPathComponent)
+                if !fileManager.fileExists(atPath: destination.path) {
+                    try? fileManager.moveItem(at: file, to: destination)
+                }
+            }
+        }
+
+        // Only remove old directory if it's empty (all files migrated successfully)
+        if let remaining = try? fileManager.contentsOfDirectory(at: oldDirectory, includingPropertiesForKeys: nil),
+           remaining.isEmpty {
+            try? fileManager.removeItem(at: oldDirectory)
         }
     }
 
