@@ -79,16 +79,13 @@ struct OnboardingView: View {
             let duration = reduceMotion ? 0.01 : 0.8
             withAnimation(.easeOut(duration: duration)) {
                 titleOpacity = 0
-            }
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            } completion: {
                 phase = .messages(0)
                 messageOpacity = 0
                 let fadeIn = reduceMotion ? 0.01 : 0.9
                 withAnimation(.easeIn(duration: fadeIn)) {
                     messageOpacity = 1
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + fadeIn) {
+                } completion: {
                     canAdvance = true
                 }
             }
@@ -119,17 +116,14 @@ struct OnboardingView: View {
             let fadeOut = reduceMotion ? 0.01 : 0.7
             withAnimation(.easeOut(duration: fadeOut)) {
                 messageOpacity = 0
-            }
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + fadeOut) {
+            } completion: {
                 let nextIndex = index + 1
                 if nextIndex < totalMessages {
                     phase = .messages(nextIndex)
                     let fadeIn = reduceMotion ? 0.01 : 1.0
                     withAnimation(.easeIn(duration: fadeIn)) {
                         messageOpacity = 1
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + fadeIn) {
+                    } completion: {
                         canAdvance = true
                     }
                 } else {
@@ -195,39 +189,29 @@ struct OnboardingView: View {
         // Position gradient below the viewport
         gradientOffset = screenHeight
 
-        // Step 1: Stars reach full brightness (0.0s – 0.8s)
+        // Step 1: Stars reach full brightness
         let starDuration = reduceMotion ? 0.01 : 0.8
         withAnimation(.easeInOut(duration: starDuration)) {
             transitionStarBrightness = 1.0
-        }
-
-        // Step 2: Gradient rises from below while stars dim (0.8s – 3.8s)
-        let gradientDelay = reduceMotion ? 0.01 : 0.8
-        let gradientDuration = reduceMotion ? 0.01 : 3.0
-        DispatchQueue.main.asyncAfter(deadline: .now() + gradientDelay) {
+        } completion: {
+            // Step 2: Gradient rises from below while stars dim
+            let gradientDuration = reduceMotion ? 0.01 : 3.0
             withAnimation(.timingCurve(0.25, 0.1, 0.25, 1.0, duration: gradientDuration)) {
                 gradientOffset = -screenHeight * 0.8
             }
             withAnimation(.easeOut(duration: gradientDuration)) {
                 transitionStarBrightness = 0.15
-            }
-        }
+            } completion: {
+                // Step 3: Dissolve out — crossfade into matching starfield behind
+                NotificationCenter.default.post(name: .onboardingWillDismiss, object: nil)
+                HapticService.shared.success()
 
-        // Step 3: Dissolve out (3.3s) — crossfade into matching starfield behind
-        let dissolveDelay = reduceMotion ? 0.02 : 3.3
-        let dissolveDuration = reduceMotion ? 0.01 : 1.5
-        DispatchQueue.main.asyncAfter(deadline: .now() + dissolveDelay) {
-            // Signal ConstellationCanvasView to begin fan-out
-            NotificationCenter.default.post(name: .onboardingWillDismiss, object: nil)
-            HapticService.shared.success()
-
-            withAnimation(.easeOut(duration: dissolveDuration)) {
-                dismissOpacity = 0
-            }
-
-            // Remove from hierarchy after dissolve completes (view already invisible)
-            DispatchQueue.main.asyncAfter(deadline: .now() + dissolveDuration) {
-                hasCompletedOnboarding = true
+                let dissolveDuration = reduceMotion ? 0.01 : 1.5
+                withAnimation(.easeOut(duration: dissolveDuration)) {
+                    dismissOpacity = 0
+                } completion: {
+                    hasCompletedOnboarding = true
+                }
             }
         }
     }

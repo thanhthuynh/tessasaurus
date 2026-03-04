@@ -194,18 +194,27 @@ struct AddPhotoSheet: View {
 
     private func removePhoto(_ photo: SelectedPhoto) {
         selectedImages.removeAll { $0.id == photo.id }
-        // Also update the picker selection
-        if selectedImages.isEmpty {
-            selectedItems = []
-        }
+        // Always clear picker selection to prevent desync
+        selectedItems = []
     }
 
     private func uploadPhotos() {
         let photosToUpload = selectedImages.map { ($0.image, $0.caption, $0.bubbleSize) }
 
         Task {
-            await viewModel.uploadPhotos(images: photosToUpload)
-            dismiss()
+            let result = await viewModel.uploadPhotos(images: photosToUpload)
+
+            if result.failureCount == 0 {
+                // All succeeded — dismiss
+                HapticService.shared.success()
+                dismiss()
+            } else if result.successCount > 0 {
+                // Partial success — remove succeeded photos, keep sheet open
+                let succeededCount = result.successCount
+                selectedImages = Array(selectedImages.dropFirst(succeededCount))
+                selectedItems = []
+            }
+            // All failed — keep sheet open (error alert shown by VM)
         }
     }
 }

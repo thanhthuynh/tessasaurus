@@ -10,13 +10,18 @@ final class PhotoStorageService {
 
     private let fileManager = FileManager.default
     private let photosDirectory: URL
+    private let thumbnailsDirectory: URL
 
     private init() {
         let documentsDirectory = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
         photosDirectory = documentsDirectory.appendingPathComponent("Photos", isDirectory: true)
+        thumbnailsDirectory = documentsDirectory.appendingPathComponent("Thumbnails", isDirectory: true)
 
         if !fileManager.fileExists(atPath: photosDirectory.path) {
             try? fileManager.createDirectory(at: photosDirectory, withIntermediateDirectories: true)
+        }
+        if !fileManager.fileExists(atPath: thumbnailsDirectory.path) {
+            try? fileManager.createDirectory(at: thumbnailsDirectory, withIntermediateDirectories: true)
         }
 
         migrateFromCachesIfNeeded()
@@ -85,8 +90,40 @@ final class PhotoStorageService {
         }
     }
 
+    func saveThumbnail(_ image: UIImage, fileName: String, maxDimension: CGFloat = 300) throws {
+        let downsampled = downsampleImage(image, maxDimension: maxDimension)
+        let fileURL = thumbnailsDirectory.appendingPathComponent(fileName)
+        guard let data = downsampled.jpegData(compressionQuality: 0.7) else {
+            throw PhotoStorageError.compressionFailed
+        }
+        try data.write(to: fileURL)
+    }
+
+    func loadThumbnail(fileName: String) -> UIImage? {
+        let fileURL = thumbnailsDirectory.appendingPathComponent(fileName)
+        guard fileManager.fileExists(atPath: fileURL.path),
+              let data = try? Data(contentsOf: fileURL),
+              let image = UIImage(data: data) else {
+            return nil
+        }
+        return image
+    }
+
     func generateFileName(for photoID: UUID) -> String {
         "\(photoID.uuidString).jpg"
+    }
+
+    private func downsampleImage(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
+        let size = image.size
+        let maxSide = max(size.width, size.height)
+        guard maxSide > maxDimension else { return image }
+
+        let scale = maxDimension / maxSide
+        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+        }
     }
 
     // MARK: - Photo Metadata Persistence

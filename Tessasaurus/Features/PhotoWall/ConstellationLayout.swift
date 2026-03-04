@@ -5,11 +5,13 @@
 
 import CoreGraphics
 
-struct PlacedBubble {
+struct PlacedBubble: Identifiable {
     let index: Int
     let position: CGPoint
     let ringIndex: Int
     let angleInRing: CGFloat
+
+    var id: Int { index }
 }
 
 enum ConstellationLayout {

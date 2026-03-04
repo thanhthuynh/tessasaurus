@@ -7,6 +7,11 @@ import SwiftUI
 import CloudKit
 import Observation
 
+struct UploadResult {
+    let successCount: Int
+    let failureCount: Int
+}
+
 @Observable
 @MainActor
 final class PhotoWallViewModel {
@@ -26,24 +31,36 @@ final class PhotoWallViewModel {
     // Key for storing uploader mode preference
     private let uploaderModeKey = "isUploaderMode"
 
+    // Concurrent operation guards
+    private var isPreloading = false
+    private var needsRefreshAfterUpload = false
+
     init() {
         isUploaderMode = UserDefaults.standard.bool(forKey: uploaderModeKey)
         loadCachedPhotos()
-        // Start pre-warming memory cache from disk immediately
-        Task { [weak self] in await self?.preloadImages() }
     }
 
     // MARK: - Public Methods
 
     func loadPhotos() async {
         guard !isLoading else { return }
+
+        // Defer loading if upload is in progress
+        if isUploading {
+            needsRefreshAfterUpload = true
+            return
+        }
+
         isLoading = true
 
         do {
             // Check iCloud account status
             let status = try await cloudService.checkAccountStatus()
             guard status == .available else {
-                // No iCloud account — silently fall back to cached photos
+                if status == .noAccount {
+                    errorMessage = "Sign in to iCloud in Settings to sync photos"
+                    showError = true
+                }
                 isLoading = false
                 return
             }
@@ -66,12 +83,14 @@ final class PhotoWallViewModel {
         isLoading = false
     }
 
-    func uploadPhotos(images: [(UIImage, String?, BubbleSize)]) async {
-        guard !isUploading else { return }
+    func uploadPhotos(images: [(UIImage, String?, BubbleSize)]) async -> UploadResult {
+        guard !isUploading else { return UploadResult(successCount: 0, failureCount: 0) }
         isUploading = true
         uploadProgress = 0
 
         let totalCount = Double(images.count)
+        var successCount = 0
+        var failureCount = 0
 
         for (index, (image, caption, size)) in images.enumerated() {
             do {
@@ -83,11 +102,15 @@ final class PhotoWallViewModel {
 
                 photos.insert(photo, at: 0)
 
-                // Cache the image
+                // Cache thumbnail for constellation view
+                cacheService.setThumbnail(image, forKey: photo.id.uuidString)
+                // Also cache full-res for immediate detail view access
                 cacheService.setImage(image, forKey: photo.id.uuidString)
                 loadedImageIDs.insert(photo.id)
 
+                successCount += 1
             } catch {
+                failureCount += 1
                 handleError(error)
             }
 
@@ -99,6 +122,14 @@ final class PhotoWallViewModel {
 
         isUploading = false
         uploadProgress = 0
+
+        // Refresh if a load was deferred during upload
+        if needsRefreshAfterUpload {
+            needsRefreshAfterUpload = false
+            await refresh()
+        }
+
+        return UploadResult(successCount: successCount, failureCount: failureCount)
     }
 
     func deletePhoto(_ photo: Photo) async {
@@ -109,6 +140,7 @@ final class PhotoWallViewModel {
 
             // Remove from cache
             cacheService.removeImage(forKey: photo.id.uuidString)
+            cacheService.removeImage(forKey: "thumb_\(photo.id.uuidString)")
 
             // Save updated metadata
             try? storageService.savePhotosMetadata(photos)
@@ -118,16 +150,24 @@ final class PhotoWallViewModel {
         }
     }
 
+    /// Returns thumbnail for constellation view
     func image(for photo: Photo) -> UIImage? {
         // Touch observed set so SwiftUI re-renders when new images load
+        _ = loadedImageIDs.contains(photo.id)
+        return cacheService.thumbnail(forKey: photo.id.uuidString)
+            ?? cacheService.image(forKey: photo.id.uuidString)
+    }
+
+    /// Returns full-resolution image for detail view
+    func fullResolutionImage(for photo: Photo) -> UIImage? {
         _ = loadedImageIDs.contains(photo.id)
         return cacheService.image(forKey: photo.id.uuidString)
     }
 
     func loadImageAsync(for photo: Photo) async -> UIImage? {
-        // Check memory cache
-        if let cached = cacheService.image(forKey: photo.id.uuidString) {
-            return cached
+        // Check memory cache (thumbnail)
+        if cacheService.thumbnail(forKey: photo.id.uuidString) != nil {
+            return cacheService.thumbnail(forKey: photo.id.uuidString)
         }
 
         // Check local storage on background thread
@@ -139,14 +179,23 @@ final class PhotoWallViewModel {
         }.value
 
         if let diskImage {
+            // Generate and cache thumbnail
+            cacheService.setThumbnail(diskImage, forKey: photo.id.uuidString)
             cacheService.setImage(diskImage, forKey: photo.id.uuidString)
             loadedImageIDs.insert(photo.id)
+
+            // Save thumbnail to disk for next launch
+            if let fileName {
+                try? storageService.saveThumbnail(diskImage, fileName: fileName)
+            }
+
             return diskImage
         }
 
         // Fallback: fetch from CloudKit
         do {
             if let cloudImage = try await cloudService.fetchImageForPhoto(photo) {
+                cacheService.setThumbnail(cloudImage, forKey: photo.id.uuidString)
                 cacheService.setImage(cloudImage, forKey: photo.id.uuidString)
                 loadedImageIDs.insert(photo.id)
                 return cloudImage
@@ -159,6 +208,10 @@ final class PhotoWallViewModel {
     }
 
     func preloadImages() async {
+        guard !isPreloading else { return }
+        isPreloading = true
+        defer { isPreloading = false }
+
         let unloaded = photos.filter { image(for: $0) == nil }
         let maxConcurrent = 4
 
@@ -198,18 +251,5 @@ final class PhotoWallViewModel {
     private func handleError(_ error: Error) {
         errorMessage = error.localizedDescription
         showError = true
-    }
-
-    private func cloudKitError(for status: CKAccountStatus) -> CloudKitError {
-        switch status {
-        case .noAccount:
-            return .noAccount
-        case .restricted:
-            return .restricted
-        case .temporarilyUnavailable:
-            return .temporarilyUnavailable
-        default:
-            return .unknown
-        }
     }
 }

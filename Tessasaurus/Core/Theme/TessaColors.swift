@@ -31,6 +31,8 @@ enum TessaColors {
     static let cardBorder = Color.white.opacity(0.3)
     static let textPrimary = Color.white
     static let textSecondary = Color.white.opacity(0.8)
+    static let textTertiary = Color.white.opacity(0.5)
+    static let inputBackground = Color.white.opacity(0.1)
 }
 
 extension Color {

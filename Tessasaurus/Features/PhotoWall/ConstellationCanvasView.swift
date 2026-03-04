@@ -38,6 +38,16 @@ struct ConstellationCanvasView: View {
     private let magnificationRadius: CGFloat = 200
     private let haptics = HapticService.shared
 
+    /// Identity hash for detecting meaningful photo changes (not just count)
+    private var photosIdentity: Int {
+        var hasher = Hasher()
+        for photo in photos {
+            hasher.combine(photo.id)
+            hasher.combine(photo.bubbleSize)
+        }
+        return hasher.finalize()
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let viewCenter = CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2)
@@ -55,9 +65,9 @@ struct ConstellationCanvasView: View {
                 )
                 .drawingGroup()
 
-                ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
-                    if index < cachedPlacements.count {
-                        let placement = cachedPlacements[index]
+                ForEach(cachedPlacements) { placement in
+                    if placement.index < photos.count {
+                        let photo = photos[placement.index]
                         let screenPos = screenPosition(for: placement.position, center: viewCenter)
 
                         // Visibility culling
@@ -91,6 +101,15 @@ struct ConstellationCanvasView: View {
                     }
                 }
             }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Photo constellation with \(photos.count) photos")
+            .accessibilityAction(.magicTap) {
+                withAnimation(TessaAnimations.standard) {
+                    canvasOffset = .zero
+                    canvasScale = 1.0
+                    lastScale = 1.0
+                }
+            }
             .gesture(dragGesture(viewportSize: geometry.size))
             .simultaneousGesture(magnifyGesture(anchor: viewCenter))
             .onAppear {
@@ -104,10 +123,10 @@ struct ConstellationCanvasView: View {
                 momentumController?.stop()
                 momentumController = nil
             }
-            .onChange(of: photos.count) { oldCount, newCount in
+            .onChange(of: photosIdentity) { _, _ in
                 recomputeLayout()
                 let onboardingDone = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
-                if onboardingDone && oldCount == 0 && newCount > 0 && !hasFannedOut {
+                if onboardingDone && !hasFannedOut && !photos.isEmpty {
                     performFanOut()
                 }
             }
@@ -145,7 +164,7 @@ struct ConstellationCanvasView: View {
         if reduceMotion {
             fanOutProgress = 1.0
         } else {
-            withAnimation(.easeOut(duration: 1.5)) {
+            withAnimation(TessaAnimations.fanOut) {
                 fanOutProgress = 1.0
             }
         }
@@ -386,6 +405,25 @@ struct ConstellationCanvasView: View {
     }
 }
 
+// MARK: - Display Link Target (weak trampoline to break retain cycle)
+
+@MainActor
+private final class DisplayLinkTarget: NSObject {
+    weak var controller: MomentumController?
+
+    init(controller: MomentumController) {
+        self.controller = controller
+    }
+
+    @objc func tick(_ link: CADisplayLink) {
+        guard let controller else {
+            link.invalidate()
+            return
+        }
+        controller.handleTick(link)
+    }
+}
+
 // MARK: - Momentum Controller
 
 @MainActor
@@ -409,7 +447,8 @@ final class MomentumController {
         self.onUpdate = onUpdate
         self.onComplete = onComplete
 
-        let link = CADisplayLink(target: self, selector: #selector(tick))
+        let target = DisplayLinkTarget(controller: self)
+        let link = CADisplayLink(target: target, selector: #selector(DisplayLinkTarget.tick))
         link.add(to: .main, forMode: .common)
         displayLink = link
         lastTimestamp = 0
@@ -420,7 +459,7 @@ final class MomentumController {
         displayLink = nil
     }
 
-    @objc private func tick(_ link: CADisplayLink) {
+    func handleTick(_ link: CADisplayLink) {
         if lastTimestamp == 0 {
             lastTimestamp = link.timestamp
             return

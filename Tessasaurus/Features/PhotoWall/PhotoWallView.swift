@@ -39,7 +39,7 @@ struct PhotoWallView: View {
             if let photo = selectedPhoto {
                 PhotoDetailView(
                     photo: photo,
-                    image: viewModel.image(for: photo),
+                    image: viewModel.fullResolutionImage(for: photo),
                     onDismiss: {
                         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                             selectedPhoto = nil
@@ -83,12 +83,12 @@ struct PhotoWallView: View {
 
                 VStack(spacing: 4) {
                     Text("Our Memories")
-                        .font(.largeTitle.weight(.bold))
+                        .font(TessaTypography.sectionTitle)
                         .foregroundStyle(.white)
 
                     Text("\(viewModel.photos.count) photos")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.7))
+                        .font(TessaTypography.detail)
+                        .foregroundStyle(TessaColors.textSecondary)
                 }
 
                 Spacer()
@@ -114,6 +114,7 @@ struct PhotoWallView: View {
                         .font(.title3)
                         .foregroundStyle(.white.opacity(0.7))
                         .padding(8)
+                        .accessibilityLabel("Settings menu")
                 }
             }
         }
@@ -159,6 +160,7 @@ struct PhotoWallView: View {
                 Spacer()
 
                 Button {
+                    HapticService.shared.lightTap()
                     showAddPhotoSheet = true
                 } label: {
                     Image(systemName: "plus")
@@ -192,18 +194,18 @@ struct PhotoWallView: View {
                 .foregroundStyle(TessaGradients.sunrise)
 
             Text("No photos yet")
-                .font(.title2.weight(.semibold))
+                .font(TessaTypography.subtitle)
                 .foregroundStyle(.white)
 
             if viewModel.isUploaderMode {
                 Text("Tap the + button to add photos")
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.7))
+                    .font(TessaTypography.detail)
+                    .foregroundStyle(TessaColors.textSecondary)
                     .multilineTextAlignment(.center)
             } else {
                 Text("Photos will appear here when\nthey're shared with you")
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.7))
+                    .font(TessaTypography.detail)
+                    .foregroundStyle(TessaColors.textSecondary)
                     .multilineTextAlignment(.center)
             }
 
@@ -221,8 +223,8 @@ struct PhotoWallView: View {
                 .scaleEffect(1.2)
 
             Text("Loading photos...")
-                .font(.subheadline)
-                .foregroundStyle(.white.opacity(0.7))
+                .font(TessaTypography.detail)
+                .foregroundStyle(TessaColors.textSecondary)
         }
     }
 }

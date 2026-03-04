@@ -31,7 +31,7 @@ struct PhotoDetailView: View {
     var body: some View {
         ZStack {
             // Background with blur and progressive opacity
-            Color.black.opacity(Double(0.9 * (1.0 - dragProgress * 0.5)))
+            TessaColors.deepSpace.opacity(Double(0.95 * (1.0 - dragProgress * 0.5)))
                 .background(.ultraThinMaterial.opacity(0.5))
                 .ignoresSafeArea()
                 .onTapGesture {
@@ -46,7 +46,7 @@ struct PhotoDetailView: View {
                 // Caption in glass card
                 if let caption = photo.caption {
                     Text(caption)
-                        .font(.title3.weight(.medium))
+                        .font(TessaTypography.cardTitle)
                         .foregroundStyle(.white)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 16)
@@ -65,12 +65,12 @@ struct PhotoDetailView: View {
                 if let date = photo.createdAt as Date? {
                     VStack(spacing: 4) {
                         Text(date, style: .date)
-                            .font(.caption)
+                            .font(TessaTypography.caption)
                             .foregroundStyle(.white.opacity(0.6))
 
                         Text(Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date()))
-                            .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.4))
+                            .font(TessaTypography.badge)
+                            .foregroundStyle(TessaColors.textTertiary)
                     }
                 }
 
@@ -80,6 +80,7 @@ struct PhotoDetailView: View {
             }
         }
         .gesture(dragGesture)
+        .accessibilityAction(named: "Dismiss") { onDismiss() }
     }
 
     @ViewBuilder
@@ -126,8 +127,8 @@ struct PhotoDetailView: View {
 
     private var dismissHint: some View {
         Text("Swipe down to close")
-            .font(.caption)
-            .foregroundStyle(.white.opacity(0.5))
+            .font(TessaTypography.caption)
+            .foregroundStyle(TessaColors.textTertiary)
             .padding(.bottom, 40)
     }
 
@@ -137,7 +138,7 @@ struct PhotoDetailView: View {
                 state = value.magnification
             }
             .onEnded { value in
-                withAnimation(.spring(response: 0.3)) {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                     scale = min(max(scale * value.magnification, 1.0), 4.0)
                     if scale == 1.0 {
                         offset = .zero
@@ -167,7 +168,7 @@ struct PhotoDetailView: View {
                     if abs(value.translation.height) > dismissThreshold {
                         onDismiss()
                     } else {
-                        withAnimation(.spring(response: 0.3)) {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                             dragOffset = .zero
                         }
                     }

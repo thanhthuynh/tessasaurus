@@ -7,6 +7,7 @@ import SwiftUI
 
 struct GradientBackground: View {
     @State private var animateGradient = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         MeshGradient(
@@ -25,6 +26,7 @@ struct GradientBackground: View {
         )
         .ignoresSafeArea()
         .onAppear {
+            guard !reduceMotion else { return }
             withAnimation(.easeInOut(duration: 5).repeatForever(autoreverses: true)) {
                 animateGradient.toggle()
             }
