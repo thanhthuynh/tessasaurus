@@ -25,6 +25,28 @@ enum BubbleSize: String, Codable, CaseIterable {
         case .large: return "Large"
         }
     }
+
+    static func autoAssign(photoCount: Int, aspectRatio: CGFloat) -> BubbleSize {
+        // First 5 photos are always large (founding memories)
+        if photoCount < 5 { return .large }
+
+        // Near-square photos (0.85–1.15 aspect ratio) get a size bump
+        let isNearSquare = aspectRatio >= 0.85 && aspectRatio <= 1.15
+
+        // Deterministic weighted distribution seeded from current count
+        let hash = abs(photoCount.hashValue) % 100
+        if isNearSquare {
+            // Bump: 35% large, 40% medium, 25% small
+            if hash < 35 { return .large }
+            else if hash < 75 { return .medium }
+            else { return .small }
+        } else {
+            // 25% large, 45% medium, 30% small
+            if hash < 25 { return .large }
+            else if hash < 70 { return .medium }
+            else { return .small }
+        }
+    }
 }
 
 struct Photo: Identifiable, Codable, Equatable {
@@ -70,7 +92,7 @@ struct Photo: Identifiable, Codable, Equatable {
     }
 
     static func == (lhs: Photo, rhs: Photo) -> Bool {
-        lhs.id == rhs.id && lhs.caption == rhs.caption
+        lhs.id == rhs.id && lhs.caption == rhs.caption && lhs.bubbleSize == rhs.bubbleSize
     }
 }
 

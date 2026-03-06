@@ -12,6 +12,7 @@ struct PhotoDetailView: View {
     let isUploaderMode: Bool
     let onDismiss: () -> Void
     var onUpdateCaption: ((String?) -> Void)?
+    var onUpdateBubbleSize: ((BubbleSize) -> Void)?
 
     @State private var asyncImage: UIImage?
     @State private var scale: CGFloat = 1.0
@@ -57,6 +58,11 @@ struct PhotoDetailView: View {
 
                 // Caption section
                 captionSection
+
+                // Bubble size picker (uploader mode only)
+                if isUploaderMode {
+                    bubbleSizeSection
+                }
 
                 if let date = photo.createdAt as Date? {
                     VStack(spacing: 4) {
@@ -193,6 +199,41 @@ struct PhotoDetailView: View {
                     .padding(.horizontal, 32)
             }
         }
+    }
+
+    // MARK: - Bubble Size Section
+
+    private var bubbleSizeSection: some View {
+        HStack(spacing: 12) {
+            Text("Size:")
+                .font(TessaTypography.caption)
+                .foregroundStyle(.white.opacity(0.6))
+
+            Picker("Bubble Size", selection: Binding(
+                get: { photo.bubbleSize },
+                set: { newSize in
+                    haptics.lightTap()
+                    onUpdateBubbleSize?(newSize)
+                }
+            )) {
+                ForEach(BubbleSize.allCases, id: \.self) { size in
+                    Text(size.displayName).tag(size)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityLabel("Photo display size")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(TessaColors.cardBorder, lineWidth: 1)
+                )
+        )
+        .padding(.horizontal, 32)
     }
 
     @ViewBuilder

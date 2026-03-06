@@ -186,6 +186,32 @@ final class CloudKitPhotoService {
         }
     }
 
+    func updatePhotoBubbleSize(_ photo: Photo, newSize: BubbleSize) async throws {
+        guard let recordName = photo.cloudRecordID else { return }
+        let recordID = CKRecord.ID(recordName: recordName)
+        let record = CKRecord(recordType: "Photo", recordID: recordID)
+        record["bubbleSize"] = newSize.rawValue
+
+        let operation = CKModifyRecordsOperation(
+            recordsToSave: [record],
+            recordIDsToDelete: nil
+        )
+        operation.savePolicy = .changedKeys
+        operation.qualityOfService = .userInitiated
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            operation.modifyRecordsResultBlock = { result in
+                switch result {
+                case .success:
+                    continuation.resume()
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            }
+            self.database.add(operation)
+        }
+    }
+
     // MARK: - Subscriptions
 
     func subscribeToChanges() async {

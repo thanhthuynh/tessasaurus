@@ -59,6 +59,14 @@ struct PhotoWallView: View {
                         Task {
                             await viewModel.updateCaption(for: photo, newCaption: newCaption)
                         }
+                    },
+                    onUpdateBubbleSize: { newSize in
+                        withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) {
+                            selectedPhoto?.bubbleSize = newSize
+                        }
+                        Task {
+                            await viewModel.updateBubbleSize(for: photo, newSize: newSize)
+                        }
                     }
                 )
                 .transition(.opacity)

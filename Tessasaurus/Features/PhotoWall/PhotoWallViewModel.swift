@@ -70,6 +70,9 @@ final class PhotoWallViewModel {
 
             photos = cloudPhotos
 
+            // Migrate bubble sizes for existing photos (one-time)
+            await migrateBubbleSizesIfNeeded()
+
             // Subscribe to changes if not already (non-throwing, logs errors internally)
             await cloudService.subscribeToChanges()
 
@@ -188,6 +191,25 @@ final class PhotoWallViewModel {
         }
     }
 
+    func updateBubbleSize(for photo: Photo, newSize: BubbleSize) async {
+        let oldSize = photo.bubbleSize
+        // Optimistic update
+        if let index = photos.firstIndex(where: { $0.id == photo.id }) {
+            photos[index].bubbleSize = newSize
+        }
+        do {
+            try await cloudService.updatePhotoBubbleSize(photo, newSize: newSize)
+            try? storageService.savePhotosMetadata(photos)
+        } catch {
+            // Revert on failure
+            if let index = photos.firstIndex(where: { $0.id == photo.id }) {
+                photos[index].bubbleSize = oldSize
+            }
+            errorMessage = "Failed to update size"
+            showError = true
+        }
+    }
+
     func updateCaption(for photo: Photo, newCaption: String?) async {
         let oldCaption = photo.caption
         if let index = photos.firstIndex(where: { $0.id == photo.id }) {
@@ -281,6 +303,21 @@ final class PhotoWallViewModel {
     }
 
     // MARK: - Private Methods
+
+    private func migrateBubbleSizesIfNeeded() async {
+        let key = "hasRunBubbleSizeMigration"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+
+        for i in photos.indices {
+            photos[i].bubbleSize = BubbleSize.autoAssign(
+                photoCount: i,
+                aspectRatio: photos[i].aspectRatio
+            )
+            try? await cloudService.updatePhotoBubbleSize(photos[i], newSize: photos[i].bubbleSize)
+        }
+        try? storageService.savePhotosMetadata(photos)
+        UserDefaults.standard.set(true, forKey: key)
+    }
 
     private func loadCachedPhotos() {
         let cached = storageService.loadPhotosMetadata()

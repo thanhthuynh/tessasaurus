@@ -18,7 +18,6 @@ struct SelectedPhoto: Identifiable {
     let id = UUID()
     var image: UIImage?
     var caption: String = ""
-    var bubbleSize: BubbleSize = .medium
     var uploadState: PhotoUploadState = .pending
     var isLoaded: Bool { image != nil }
 }
@@ -270,10 +269,14 @@ struct AddPhotoSheet: View {
     }
 
     private func uploadPhotos() {
-        let photosToUpload: [(UIImage, String?, BubbleSize)] = selectedImages.compactMap { photo in
+        let photosToUpload: [(UIImage, String?, BubbleSize)] = selectedImages.enumerated().compactMap { index, photo in
             guard let image = photo.image else { return nil }
             let caption: String? = photo.caption.isEmpty ? nil : photo.caption
-            return (image, caption, photo.bubbleSize)
+            let autoSize = BubbleSize.autoAssign(
+                photoCount: viewModel.photos.count + index,
+                aspectRatio: CGFloat(image.size.width / image.size.height)
+            )
+            return (image, caption, autoSize)
         }
 
         Task {
@@ -377,24 +380,6 @@ struct SelectedPhotoCard: View {
                     .submitLabel(.done)
                     .onSubmit { focusedCaptionID.wrappedValue = nil }
                     .accessibilityLabel("Photo caption")
-
-                // Bubble size picker
-                HStack(spacing: 12) {
-                    Text("Size:")
-                        .font(TessaTypography.caption)
-                        .foregroundStyle(TessaColors.textSecondary)
-
-                    Picker("Bubble Size", selection: $photo.bubbleSize) {
-                        ForEach(BubbleSize.allCases, id: \.self) { size in
-                            Text(size.displayName).tag(size)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .accessibilityLabel("Photo display size")
-                    .onChange(of: photo.bubbleSize) { _, _ in
-                        HapticService.shared.selection()
-                    }
-                }
             }
         }
         .padding()
