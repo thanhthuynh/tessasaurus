@@ -15,19 +15,14 @@ struct ConstellationCanvasView: View {
     @State private var lastScale: CGFloat = 1.0
     @State private var fanOutProgress: CGFloat = 0
     @State private var hasFannedOut = false
-    @State private var momentumController: MomentumController?
 
     // Cached layout
     @State private var cachedPlacements: [PlacedBubble] = []
     @State private var cachedBounds: CGRect = .zero
     @State private var cachedEdges: [ConstellationEdge] = []
 
-    // Drag tracking for velocity
+    // Drag tracking
     @State private var dragStartOffset: CGPoint? = nil
-    @State private var lastDragPosition: CGPoint = .zero
-    @State private var lastDragTime: Date = .now
-    @State private var dragVelocity: CGPoint = .zero
-    @GestureState private var isDragging = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -119,10 +114,6 @@ struct ConstellationCanvasView: View {
                     performFanOut()
                 }
             }
-            .onDisappear {
-                momentumController?.stop()
-                momentumController = nil
-            }
             .onChange(of: photosIdentity) { _, _ in
                 recomputeLayout()
                 let onboardingDone = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
@@ -201,30 +192,12 @@ struct ConstellationCanvasView: View {
     // MARK: - Gestures
 
     private func dragGesture(viewportSize: CGSize) -> some Gesture {
-        DragGesture()
+        DragGesture(minimumDistance: 5)
             .onChanged { value in
-                // Stop any ongoing momentum
-                momentumController?.stop()
-                momentumController = nil
-
-                // Capture starting offset on first event
                 if dragStartOffset == nil {
                     dragStartOffset = canvasOffset
                 }
 
-                // Calculate velocity
-                let now = Date()
-                let dt = now.timeIntervalSince(lastDragTime)
-                if dt > 0 && dt < 0.5 {
-                    dragVelocity = CGPoint(
-                        x: (value.location.x - lastDragPosition.x) / CGFloat(dt),
-                        y: (value.location.y - lastDragPosition.y) / CGFloat(dt)
-                    )
-                }
-                lastDragPosition = value.location
-                lastDragTime = now
-
-                // Fixed: base offset from drag START, not current (cumulative) offset
                 let newOffset = CGPoint(
                     x: dragStartOffset!.x + value.translation.width,
                     y: dragStartOffset!.y + value.translation.height
@@ -237,7 +210,7 @@ struct ConstellationCanvasView: View {
                 dragStartOffset = nil
                 let bounds = scaledBounds()
 
-                // Check if beyond bounds - spring back
+                // Spring back if beyond bounds
                 let clamped = clampToBounds(offset: canvasOffset, bounds: bounds)
                 if clamped != canvasOffset {
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
@@ -247,34 +220,27 @@ struct ConstellationCanvasView: View {
                     return
                 }
 
-                // Apply momentum
-                let velocity = dragVelocity
-                guard abs(velocity.x) > 100 || abs(velocity.y) > 100 else { return }
-
-                let controller = MomentumController()
-                momentumController = controller
-
-                controller.start(
-                    velocity: velocity,
-                    decayRate: 0.93,
-                    onUpdate: { delta in
-                        let newOffset = CGPoint(
-                            x: canvasOffset.x + delta.x,
-                            y: canvasOffset.y + delta.y
-                        )
-                        let clampedNew = clampToBounds(offset: newOffset, bounds: bounds)
-                        canvasOffset = clampedNew
-
-                        // Stop if hit bounds
-                        if clampedNew != newOffset {
-                            momentumController?.stop()
-                            haptics.panBounce()
-                        }
-                    },
-                    onComplete: {
-                        momentumController = nil
-                    }
+                // Use system-provided predicted end translation for momentum
+                let remainingTranslation = CGPoint(
+                    x: value.predictedEndTranslation.width - value.translation.width,
+                    y: value.predictedEndTranslation.height - value.translation.height
                 )
+
+                guard abs(remainingTranslation.x) > 20 || abs(remainingTranslation.y) > 20 else { return }
+
+                let targetOffset = CGPoint(
+                    x: canvasOffset.x + remainingTranslation.x,
+                    y: canvasOffset.y + remainingTranslation.y
+                )
+                let clampedTarget = clampToBounds(offset: targetOffset, bounds: bounds)
+
+                withAnimation(.interpolatingSpring(stiffness: 50, damping: 15)) {
+                    canvasOffset = clampedTarget
+                }
+
+                if clampedTarget != targetOffset {
+                    haptics.panBounce()
+                }
             }
     }
 
@@ -403,86 +369,6 @@ struct ConstellationCanvasView: View {
 
     private func easeOut(_ t: CGFloat) -> CGFloat {
         1 - pow(1 - t, 3)
-    }
-}
-
-// MARK: - Display Link Target (weak trampoline to break retain cycle)
-
-@MainActor
-private final class DisplayLinkTarget: NSObject {
-    weak var controller: MomentumController?
-
-    init(controller: MomentumController) {
-        self.controller = controller
-    }
-
-    @objc func tick(_ link: CADisplayLink) {
-        guard let controller else {
-            link.invalidate()
-            return
-        }
-        controller.handleTick(link)
-    }
-}
-
-// MARK: - Momentum Controller
-
-@MainActor
-final class MomentumController {
-    private var displayLink: CADisplayLink?
-    private var velocity: CGPoint = .zero
-    private var decayRate: CGFloat = 0.95
-    private var onUpdate: ((CGPoint) -> Void)?
-    private var onComplete: (() -> Void)?
-    private var lastTimestamp: CFTimeInterval = 0
-
-    func start(
-        velocity: CGPoint,
-        decayRate: CGFloat,
-        onUpdate: @escaping (CGPoint) -> Void,
-        onComplete: @escaping () -> Void
-    ) {
-        stop()
-        self.velocity = velocity
-        self.decayRate = decayRate
-        self.onUpdate = onUpdate
-        self.onComplete = onComplete
-
-        let target = DisplayLinkTarget(controller: self)
-        let link = CADisplayLink(target: target, selector: #selector(DisplayLinkTarget.tick))
-        link.add(to: .main, forMode: .common)
-        displayLink = link
-        lastTimestamp = 0
-    }
-
-    func stop() {
-        displayLink?.invalidate()
-        displayLink = nil
-    }
-
-    func handleTick(_ link: CADisplayLink) {
-        if lastTimestamp == 0 {
-            lastTimestamp = link.timestamp
-            return
-        }
-
-        let dt = CGFloat(link.timestamp - lastTimestamp)
-        lastTimestamp = link.timestamp
-
-        velocity.x *= decayRate
-        velocity.y *= decayRate
-
-        let delta = CGPoint(x: velocity.x * dt, y: velocity.y * dt)
-        onUpdate?(delta)
-
-        if abs(velocity.x) < 0.5 && abs(velocity.y) < 0.5 {
-            stop()
-            onComplete?()
-        }
-    }
-
-    deinit {
-        displayLink?.invalidate()
     }
 }
 

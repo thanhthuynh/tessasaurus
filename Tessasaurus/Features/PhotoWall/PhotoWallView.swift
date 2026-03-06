@@ -24,6 +24,7 @@ struct PhotoWallView: View {
                 .ignoresSafeArea()
             } else {
                 constellationCanvas
+                    .ignoresSafeArea()
             }
 
             // Floating header overlay
