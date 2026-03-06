@@ -80,7 +80,19 @@ struct PhotoDetailView: View {
         .onAppear {
             editedCaption = photo.caption ?? ""
         }
-        .task {
+        .onChange(of: photo.caption) { _, newCaption in
+            editedCaption = newCaption ?? ""
+        }
+        .onChange(of: photo.id) { _, _ in
+            scale = 1.0
+            offset = .zero
+            dragOffset = .zero
+            isEditingCaption = false
+            isCaptionFocused = false
+            editedCaption = photo.caption ?? ""
+        }
+        .task(id: photo.id) {
+            asyncImage = nil
             if image == nil, let loader = imageLoader {
                 asyncImage = await loader(photo)
             }

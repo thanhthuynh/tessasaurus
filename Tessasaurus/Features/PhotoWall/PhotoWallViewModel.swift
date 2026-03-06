@@ -30,6 +30,7 @@ final class PhotoWallViewModel {
     private let uploaderModeKey = "isUploaderMode"
 
     private var needsRefreshAfterUpload = false
+    private var inFlightLoads: [UUID: Task<UIImage?, Never>] = [:]
 
     init() {
         isUploaderMode = UserDefaults.standard.bool(forKey: uploaderModeKey)
@@ -210,43 +211,64 @@ final class PhotoWallViewModel {
     }
 
     func loadImageAsync(for photo: Photo) async -> UIImage? {
-        // Check memory cache (thumbnail)
-        if cacheService.thumbnail(forKey: photo.id.uuidString) != nil {
-            return cacheService.thumbnail(forKey: photo.id.uuidString)
+        // 1. Check memory cache (thumbnail) — instant return
+        if let thumb = cacheService.thumbnail(forKey: photo.id.uuidString) {
+            return thumb
         }
 
-        // Check local storage on background thread
+        // Deduplicate: if already loading this photo, await the existing task
+        if let existing = inFlightLoads[photo.id] {
+            return await existing.value
+        }
+
+        let photoId = photo.id
+        let photoKey = photoId.uuidString
         let fileName = photo.localFileName
-        let diskImage: UIImage? = await Task.detached(priority: .userInitiated) {
-            guard let fileName else { return nil }
-            let storage = PhotoStorageService.shared
-            return storage.loadImage(fileName: fileName)
-        }.value
 
-        if let diskImage {
-            // Generate and cache thumbnail
-            cacheService.setThumbnail(diskImage, forKey: photo.id.uuidString)
-            cacheService.setImage(diskImage, forKey: photo.id.uuidString)
-            // Save thumbnail to disk for next launch
-            if let fileName {
-                try? storageService.saveThumbnail(diskImage, fileName: fileName)
+        let task = Task<UIImage?, Never> {
+            // 2. Check thumbnail disk cache (fast, small files)
+            let thumbImage: UIImage? = await Task.detached(priority: .userInitiated) {
+                guard let fileName else { return nil }
+                return PhotoStorageService.shared.loadThumbnail(fileName: fileName)
+            }.value
+
+            if let thumbImage {
+                self.cacheService.setThumbnail(thumbImage, forKey: photoKey)
+                return thumbImage
             }
 
-            return diskImage
-        }
+            // 3. Check full-res disk, generate thumbnail
+            let diskImage: UIImage? = await Task.detached(priority: .userInitiated) {
+                guard let fileName else { return nil }
+                return PhotoStorageService.shared.loadImage(fileName: fileName)
+            }.value
 
-        // Fallback: fetch from CloudKit
-        do {
-            if let cloudImage = try await cloudService.fetchImageForPhoto(photo) {
-                cacheService.setThumbnail(cloudImage, forKey: photo.id.uuidString)
-                cacheService.setImage(cloudImage, forKey: photo.id.uuidString)
-                return cloudImage
+            if let diskImage {
+                self.cacheService.setThumbnail(diskImage, forKey: photoKey)
+                if let fileName {
+                    try? self.storageService.saveThumbnail(diskImage, fileName: fileName)
+                }
+                return self.cacheService.thumbnail(forKey: photoKey)!
             }
-        } catch {
-            print("[PhotoWall] CloudKit fallback failed for photo \(photo.id): \(error.localizedDescription)")
+
+            // 4. Fallback: CloudKit
+            do {
+                if let cloudImage = try await self.cloudService.fetchImageForPhoto(photo) {
+                    self.cacheService.setThumbnail(cloudImage, forKey: photoKey)
+                    self.cacheService.setImage(cloudImage, forKey: photoKey)
+                    return self.cacheService.thumbnail(forKey: photoKey)!
+                }
+            } catch {
+                print("[PhotoWall] CloudKit fallback failed for photo \(photoId): \(error.localizedDescription)")
+            }
+
+            return nil
         }
 
-        return nil
+        inFlightLoads[photoId] = task
+        let result = await task.value
+        inFlightLoads.removeValue(forKey: photoId)
+        return result
     }
 
     func toggleUploaderMode() {

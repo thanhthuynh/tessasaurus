@@ -163,9 +163,27 @@ final class CloudKitPhotoService {
     func updatePhotoCaption(_ photo: Photo, newCaption: String?) async throws {
         guard let recordName = photo.cloudRecordID else { return }
         let recordID = CKRecord.ID(recordName: recordName)
-        let record = try await database.record(for: recordID)
+        let record = CKRecord(recordType: "Photo", recordID: recordID)
         record["caption"] = newCaption
-        try await database.save(record)
+
+        let operation = CKModifyRecordsOperation(
+            recordsToSave: [record],
+            recordIDsToDelete: nil
+        )
+        operation.savePolicy = .changedKeys
+        operation.qualityOfService = .userInitiated
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            operation.modifyRecordsResultBlock = { result in
+                switch result {
+                case .success:
+                    continuation.resume()
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            }
+            self.database.add(operation)
+        }
     }
 
     // MARK: - Subscriptions

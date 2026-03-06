@@ -41,8 +41,8 @@ struct PhotoBubble: View {
                 // Glow aura
                 Circle()
                     .fill(TessaGradients.photoGlow(color: glowColor))
-                    .frame(width: bubbleSize * 1.6, height: bubbleSize * 1.6)
-                    .blur(radius: 12)
+                    .frame(width: bubbleSize * 1.35, height: bubbleSize * 1.35)
+                    .blur(radius: 8)
 
                 // Shadow layer
                 Circle()

@@ -173,7 +173,9 @@ struct AddPhotoSheet: View {
                         .transition(.scale(scale: 0.8).combined(with: .opacity))
                     }
                 }
+                .padding(.bottom, 8)
             }
+            .frame(maxHeight: .infinity)
             .scrollDismissesKeyboard(.interactively)
         }
     }

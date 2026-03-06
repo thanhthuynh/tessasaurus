@@ -70,7 +70,7 @@ struct Photo: Identifiable, Codable, Equatable {
     }
 
     static func == (lhs: Photo, rhs: Photo) -> Bool {
-        lhs.id == rhs.id
+        lhs.id == rhs.id && lhs.caption == rhs.caption
     }
 }
 

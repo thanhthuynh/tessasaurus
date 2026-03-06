@@ -32,10 +32,10 @@ struct ConstellationCanvasView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let baseBubbleSize: CGFloat = 100
-    private let minScale: CGFloat = 0.3
+    private let minScale: CGFloat = 0.5
     private let maxScale: CGFloat = 3.0
-    private let centerMagnification: CGFloat = 1.3
-    private let magnificationRadius: CGFloat = 200
+    private let centerMagnification: CGFloat = 1.15
+    private let magnificationRadius: CGFloat = 300
     private let haptics = HapticService.shared
 
     /// Identity hash for detecting meaningful photo changes (not just count)
@@ -149,12 +149,13 @@ struct ConstellationCanvasView: View {
     private func recomputeLayout() {
         cachedPlacements = ConstellationLayout.calculatePositions(
             photos: photos,
-            baseSpacing: baseBubbleSize * 1.4
+            baseBubbleSize: baseBubbleSize,
+            minSeparation: baseBubbleSize * 1.0 * 1.15 * 1.35
         )
         cachedBounds = computeContentBounds(placements: cachedPlacements)
         cachedEdges = ConstellationEdge.computeEdges(
             placements: cachedPlacements,
-            maxNeighborDistance: baseBubbleSize * 3.0
+            maxNeighborDistance: baseBubbleSize * 4.0
         )
     }
 

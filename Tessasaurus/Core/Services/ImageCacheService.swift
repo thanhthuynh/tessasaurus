@@ -11,7 +11,7 @@ final class ImageCacheService {
     private let cache = NSCache<NSString, UIImage>()
 
     private init() {
-        cache.countLimit = 100
+        cache.countLimit = 200
         cache.totalCostLimit = 50 * 1024 * 1024 // 50 MB (thumbnails are smaller)
 
         NotificationCenter.default.addObserver(

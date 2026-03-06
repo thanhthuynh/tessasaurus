@@ -11,6 +11,7 @@ struct PhotoWallView: View {
     @State private var selectedPhoto: Photo?
     @State private var showAddPhotoSheet = false
     @State private var showDeleteAllConfirmation = false
+    @State private var isSelectingPhoto = false
 
     var body: some View {
         ZStack {
@@ -44,11 +45,16 @@ struct PhotoWallView: View {
                     imageLoader: { photo in await viewModel.loadImageAsync(for: photo) },
                     isUploaderMode: viewModel.isUploaderMode,
                     onDismiss: {
+                        isSelectingPhoto = true
                         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                             selectedPhoto = nil
                         }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            isSelectingPhoto = false
+                        }
                     },
                     onUpdateCaption: { newCaption in
+                        selectedPhoto?.caption = newCaption
                         Task {
                             await viewModel.updateCaption(for: photo, newCaption: newCaption)
                         }
@@ -183,8 +189,13 @@ struct PhotoWallView: View {
         ConstellationCanvasView(
             photos: viewModel.photos,
             onPhotoTap: { photo in
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                guard !isSelectingPhoto else { return }
+                isSelectingPhoto = true
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
                     selectedPhoto = photo
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    isSelectingPhoto = false
                 }
             },
             imageLoader: { photo in

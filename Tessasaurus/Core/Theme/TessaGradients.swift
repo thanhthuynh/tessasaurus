@@ -84,7 +84,7 @@ enum TessaGradients {
             ],
             center: .center,
             startRadius: 0,
-            endRadius: 60
+            endRadius: 45
         )
     }
 
