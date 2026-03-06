@@ -5,7 +5,7 @@
 
 import UIKit
 
-final class PhotoStorageService {
+nonisolated final class PhotoStorageService: @unchecked Sendable {
     static let shared = PhotoStorageService()
 
     private let fileManager = FileManager.default

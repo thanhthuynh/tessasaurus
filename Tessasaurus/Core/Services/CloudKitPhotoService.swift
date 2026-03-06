@@ -97,6 +97,7 @@ final class CloudKitPhotoService {
               let aspectRatio = record["aspectRatio"] as? Double,
               let bubbleSizeRaw = record["bubbleSize"] as? String,
               let bubbleSize = BubbleSize(rawValue: bubbleSizeRaw) else {
+            print("[CloudKit] Incomplete metadata for record \(record.recordID.recordName)")
             return nil
         }
 
@@ -106,10 +107,15 @@ final class CloudKitPhotoService {
         // Download image if not cached locally
         if !PhotoStorageService.shared.imageExists(fileName: fileName) {
             if let asset = record["image"] as? CKAsset,
-               let fileURL = asset.fileURL,
-               let imageData = try? Data(contentsOf: fileURL),
-               let image = UIImage(data: imageData) {
-                try? PhotoStorageService.shared.saveImage(image, fileName: fileName)
+               let fileURL = asset.fileURL {
+                if let imageData = try? Data(contentsOf: fileURL),
+                   let image = UIImage(data: imageData) {
+                    try? PhotoStorageService.shared.saveImage(image, fileName: fileName)
+                } else {
+                    print("[CloudKit] Failed to read image data for photo \(id)")
+                }
+            } else {
+                print("[CloudKit] No asset/fileURL for photo \(id)")
             }
         }
 
@@ -150,6 +156,16 @@ final class CloudKitPhotoService {
         if let fileName = photo.localFileName {
             try? PhotoStorageService.shared.deleteImage(fileName: fileName)
         }
+    }
+
+    // MARK: - Update
+
+    func updatePhotoCaption(_ photo: Photo, newCaption: String?) async throws {
+        guard let recordName = photo.cloudRecordID else { return }
+        let recordID = CKRecord.ID(recordName: recordName)
+        let record = try await database.record(for: recordID)
+        record["caption"] = newCaption
+        try await database.save(record)
     }
 
     // MARK: - Subscriptions

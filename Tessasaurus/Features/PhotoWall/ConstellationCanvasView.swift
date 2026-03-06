@@ -8,7 +8,7 @@ import SwiftUI
 struct ConstellationCanvasView: View {
     let photos: [Photo]
     let onPhotoTap: (Photo) -> Void
-    let imageProvider: (Photo) -> UIImage?
+    let imageLoader: (Photo) async -> UIImage?
 
     @State private var canvasOffset: CGPoint = .zero
     @State private var canvasScale: CGFloat = 1.0
@@ -89,7 +89,7 @@ struct ConstellationCanvasView: View {
                             PhotoBubble(
                                 photo: photo,
                                 baseSize: baseBubbleSize,
-                                image: imageProvider(photo),
+                                imageLoader: imageLoader,
                                 magnificationScale: magnification,
                                 distanceFromCenter: distanceFromViewportCenter(screenPos: screenPos, center: viewCenter),
                                 onTap: { onPhotoTap(photo) }
@@ -489,6 +489,6 @@ final class MomentumController {
     ConstellationCanvasView(
         photos: Photo.samples,
         onPhotoTap: { _ in },
-        imageProvider: { _ in nil }
+        imageLoader: { _ in nil }
     )
 }

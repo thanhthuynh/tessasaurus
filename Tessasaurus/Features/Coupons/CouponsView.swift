@@ -239,7 +239,7 @@ struct CouponsView: View {
             sectionAppeared = true
         }
         for (index, coupon) in viewModel.sortedCoupons.enumerated() {
-            withAnimation(.easeOut(duration: 0.5).delay(0.3 + Double(index) * 0.06)) {
+            _ = withAnimation(.easeOut(duration: 0.5).delay(0.3 + Double(index) * 0.06)) {
                 cardAppeared.insert(coupon.id)
             }
         }

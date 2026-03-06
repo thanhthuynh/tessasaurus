@@ -10,6 +10,7 @@ struct PhotoWallView: View {
     @State private var viewModel = PhotoWallViewModel()
     @State private var selectedPhoto: Photo?
     @State private var showAddPhotoSheet = false
+    @State private var showDeleteAllConfirmation = false
 
     var body: some View {
         ZStack {
@@ -40,9 +41,16 @@ struct PhotoWallView: View {
                 PhotoDetailView(
                     photo: photo,
                     image: viewModel.fullResolutionImage(for: photo),
+                    imageLoader: { photo in await viewModel.loadImageAsync(for: photo) },
+                    isUploaderMode: viewModel.isUploaderMode,
                     onDismiss: {
                         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                             selectedPhoto = nil
+                        }
+                    },
+                    onUpdateCaption: { newCaption in
+                        Task {
+                            await viewModel.updateCaption(for: photo, newCaption: newCaption)
                         }
                     }
                 )
@@ -56,8 +64,6 @@ struct PhotoWallView: View {
         }
         .task {
             await viewModel.loadPhotos()
-            // Preload images into memory cache concurrently
-            await viewModel.preloadImages()
         }
         .sheet(isPresented: $showAddPhotoSheet) {
             AddPhotoSheet(viewModel: viewModel)
@@ -67,6 +73,33 @@ struct PhotoWallView: View {
         } message: {
             Text(viewModel.errorMessage ?? "An error occurred")
         }
+        // TEMPORARY: Delete All confirmation (remove after use)
+        .confirmationDialog(
+            "Delete All Photos?",
+            isPresented: $showDeleteAllConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete All", role: .destructive) {
+                Task { await viewModel.deleteAllPhotos() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will permanently delete all photos from CloudKit and local storage. This cannot be undone.")
+        }
+        .overlay {
+            if viewModel.isDeletingAll, let progress = viewModel.deleteAllProgress {
+                VStack(spacing: 16) {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    Text(progress)
+                        .font(TessaTypography.detail)
+                        .foregroundStyle(.white)
+                }
+                .padding(24)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            }
+        }
+        // END TEMPORARY
         .onChange(of: selectedPhoto) { _, newValue in
             withAnimation {
                 showTabBar = newValue == nil
@@ -109,6 +142,16 @@ struct PhotoWallView: View {
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
+
+                    Divider()
+
+                    // TEMPORARY: Delete All Photos (remove after use)
+                    Button(role: .destructive) {
+                        showDeleteAllConfirmation = true
+                    } label: {
+                        Label("Delete All Photos", systemImage: "trash")
+                    }
+                    .disabled(viewModel.isDeletingAll)
                 } label: {
                     Image(systemName: "gearshape.fill")
                         .font(.title3)
@@ -144,8 +187,8 @@ struct PhotoWallView: View {
                     selectedPhoto = photo
                 }
             },
-            imageProvider: { photo in
-                viewModel.image(for: photo)
+            imageLoader: { photo in
+                await viewModel.loadImageAsync(for: photo)
             }
         )
     }

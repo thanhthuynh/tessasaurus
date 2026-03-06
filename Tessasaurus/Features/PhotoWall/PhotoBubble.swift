@@ -8,11 +8,12 @@ import SwiftUI
 struct PhotoBubble: View {
     let photo: Photo
     let baseSize: CGFloat
-    let image: UIImage?
+    let imageLoader: (Photo) async -> UIImage?
     var magnificationScale: CGFloat = 1.0
     var distanceFromCenter: CGFloat = 0
     let onTap: () -> Void
 
+    @State private var loadedImage: UIImage?
     @State private var pulseScale: CGFloat = 1.0
     @State private var shimmerRotation: CGFloat = 0
 
@@ -78,6 +79,12 @@ struct PhotoBubble: View {
         .buttonStyle(BubbleButtonStyle())
         .scaleEffect(pulseScale * depthScale)
         .accessibilityLabel(photo.caption ?? "Photo")
+        .task(id: photo.id) {
+            let image = await imageLoader(photo)
+            withAnimation(.easeIn(duration: 0.3)) {
+                loadedImage = image
+            }
+        }
         .onAppear {
             guard !reduceMotion else { return }
             startIdleAnimation()
@@ -87,7 +94,7 @@ struct PhotoBubble: View {
 
     @ViewBuilder
     private var photoContent: some View {
-        if let uiImage = image {
+        if let uiImage = loadedImage {
             Image(uiImage: uiImage)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
@@ -188,14 +195,14 @@ struct LoadingBubble: View {
             PhotoBubble(
                 photo: Photo.samples[0],
                 baseSize: 120,
-                image: nil,
+                imageLoader: { _ in nil },
                 onTap: {}
             )
 
             PhotoBubble(
                 photo: Photo.samples[1],
                 baseSize: 120,
-                image: nil,
+                imageLoader: { _ in nil },
                 onTap: {}
             )
 

@@ -6,6 +6,25 @@
 import SwiftUI
 import PhotosUI
 
+// MARK: - Photo Upload State
+
+enum PhotoUploadState {
+    case pending, uploading, success, failed
+}
+
+// MARK: - Selected Photo Model
+
+struct SelectedPhoto: Identifiable {
+    let id = UUID()
+    var image: UIImage?
+    var caption: String = ""
+    var bubbleSize: BubbleSize = .medium
+    var uploadState: PhotoUploadState = .pending
+    var isLoaded: Bool { image != nil }
+}
+
+// MARK: - Add Photo Sheet
+
 struct AddPhotoSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var viewModel: PhotoWallViewModel
@@ -13,6 +32,16 @@ struct AddPhotoSheet: View {
     @State private var selectedItems: [PhotosPickerItem] = []
     @State private var selectedImages: [SelectedPhoto] = []
     @State private var isLoadingImages = false
+    @State private var loadingTask: Task<Void, Never>?
+    @FocusState private var focusedCaptionID: UUID?
+
+    private var loadedCount: Int {
+        selectedImages.filter(\.isLoaded).count
+    }
+
+    private var allLoaded: Bool {
+        !selectedImages.isEmpty && selectedImages.allSatisfy(\.isLoaded)
+    }
 
     var body: some View {
         NavigationStack {
@@ -28,9 +57,11 @@ struct AddPhotoSheet: View {
                     }
                 }
                 .padding()
+                .animation(TessaAnimations.standard, value: selectedImages.isEmpty)
 
                 if viewModel.isUploading {
                     uploadingOverlay
+                        .transition(.opacity)
                 }
             }
             .navigationTitle("Add Photos")
@@ -38,9 +69,10 @@ struct AddPhotoSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
+                        loadingTask?.cancel()
                         dismiss()
                     }
-                    .foregroundStyle(.white)
+                    .foregroundStyle(TessaColors.textPrimary)
                 }
 
                 ToolbarItem(placement: .confirmationAction) {
@@ -50,7 +82,8 @@ struct AddPhotoSheet: View {
                         }
                         .fontWeight(.semibold)
                         .foregroundStyle(TessaGradients.sunrise)
-                        .disabled(viewModel.isUploading)
+                        .disabled(viewModel.isUploading || selectedImages.contains { $0.image == nil })
+                        .accessibilityLabel("Upload \(loadedCount) photos")
                     }
                 }
             }
@@ -74,12 +107,12 @@ struct AddPhotoSheet: View {
                 .foregroundStyle(TessaGradients.sunrise)
 
             Text("Select Photos")
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(.white)
+                .font(TessaTypography.subtitle)
+                .foregroundStyle(TessaColors.textPrimary)
 
             Text("Choose photos to share with your partner")
-                .font(.subheadline)
-                .foregroundStyle(.white.opacity(0.7))
+                .font(TessaTypography.detail)
+                .foregroundStyle(TessaColors.textSecondary)
                 .multilineTextAlignment(.center)
 
             PhotosPicker(
@@ -89,8 +122,8 @@ struct AddPhotoSheet: View {
                 photoLibrary: .shared()
             ) {
                 Label("Choose Photos", systemImage: "photo.stack")
-                    .font(.headline)
-                    .foregroundStyle(.white)
+                    .font(TessaTypography.cardTitle)
+                    .foregroundStyle(TessaColors.textPrimary)
                     .padding(.horizontal, 32)
                     .padding(.vertical, 14)
                     .background(TessaGradients.sunrise)
@@ -108,8 +141,8 @@ struct AddPhotoSheet: View {
         VStack(spacing: 16) {
             HStack {
                 Text("\(selectedImages.count) photo\(selectedImages.count == 1 ? "" : "s") selected")
-                    .font(.headline)
-                    .foregroundStyle(.white)
+                    .font(TessaTypography.cardTitle)
+                    .foregroundStyle(TessaColors.textPrimary)
 
                 Spacer()
 
@@ -120,20 +153,28 @@ struct AddPhotoSheet: View {
                     photoLibrary: .shared()
                 ) {
                     Label("Add More", systemImage: "plus")
-                        .font(.subheadline.weight(.medium))
+                        .font(TessaTypography.detail.weight(.medium))
                         .foregroundStyle(TessaColors.coral)
                 }
             }
 
             ScrollView {
-                LazyVStack(spacing: 16) {
+                VStack(spacing: 16) {
                     ForEach($selectedImages) { $photo in
-                        SelectedPhotoCard(photo: $photo) {
-                            removePhoto(photo)
+                        SelectedPhotoCard(
+                            photo: $photo,
+                            focusedCaptionID: $focusedCaptionID
+                        ) {
+                            withAnimation(TessaAnimations.standard) {
+                                removePhoto(photo)
+                            }
+                            HapticService.shared.mediumTap()
                         }
+                        .transition(.scale(scale: 0.8).combined(with: .opacity))
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
         }
     }
 
@@ -149,13 +190,14 @@ struct AddPhotoSheet: View {
                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                     .scaleEffect(1.5)
 
-                Text("Uploading...")
-                    .font(.headline)
-                    .foregroundStyle(.white)
+                let uploadedCount = selectedImages.filter { $0.uploadState == .success }.count
+                Text("Uploading \(uploadedCount)/\(selectedImages.count)")
+                    .font(TessaTypography.cardTitle)
+                    .foregroundStyle(TessaColors.textPrimary)
 
                 Text("\(Int(viewModel.uploadProgress * 100))%")
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.7))
+                    .font(TessaTypography.detail)
+                    .foregroundStyle(TessaColors.textSecondary)
 
                 ProgressView(value: viewModel.uploadProgress)
                     .progressViewStyle(LinearProgressViewStyle(tint: TessaColors.coral))
@@ -166,122 +208,234 @@ struct AddPhotoSheet: View {
                 RoundedRectangle(cornerRadius: 20)
                     .fill(.ultraThinMaterial)
             )
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.updatesFrequently)
         }
     }
 
     // MARK: - Actions
 
     private func loadImages(from items: [PhotosPickerItem]) {
+        loadingTask?.cancel()
         isLoadingImages = true
+        HapticService.shared.lightTap()
 
-        Task {
-            var newPhotos: [SelectedPhoto] = []
+        // Create placeholder entries immediately
+        let placeholders: [SelectedPhoto] = items.map { _ in SelectedPhoto() }
+        selectedImages = placeholders
 
-            for item in items {
-                if let data = try? await item.loadTransferable(type: Data.self),
-                   let uiImage = UIImage(data: data) {
-                    let photo = SelectedPhoto(image: uiImage)
-                    newPhotos.append(photo)
+        loadingTask = Task {
+            // Load all images concurrently
+            let loadedImages: [(Int, UIImage?)] = await withTaskGroup(of: (Int, UIImage?).self) { group in
+                for (index, item) in items.enumerated() {
+                    group.addTask {
+                        guard !Task.isCancelled else { return (index, nil) }
+                        if let data = try? await item.loadTransferable(type: Data.self),
+                           let uiImage = UIImage(data: data) {
+                            return (index, uiImage)
+                        }
+                        return (index, nil)
+                    }
                 }
+                var results: [(Int, UIImage?)] = []
+                for await result in group {
+                    results.append(result)
+                }
+                return results
             }
 
+            guard !Task.isCancelled else { return }
+
             await MainActor.run {
-                selectedImages = newPhotos
+                // Batch update: assign all images at once
+                for (index, image) in loadedImages {
+                    guard index < selectedImages.count else { continue }
+                    selectedImages[index].image = image
+                }
+                // Remove entries that failed to load
+                selectedImages.removeAll { !$0.isLoaded }
                 isLoadingImages = false
+                if !selectedImages.isEmpty {
+                    HapticService.shared.selection()
+                }
             }
         }
     }
 
     private func removePhoto(_ photo: SelectedPhoto) {
         selectedImages.removeAll { $0.id == photo.id }
-        // Always clear picker selection to prevent desync
         selectedItems = []
     }
 
     private func uploadPhotos() {
-        let photosToUpload = selectedImages.map { ($0.image, $0.caption, $0.bubbleSize) }
+        let photosToUpload: [(UIImage, String?, BubbleSize)] = selectedImages.compactMap { photo in
+            guard let image = photo.image else { return nil }
+            let caption: String? = photo.caption.isEmpty ? nil : photo.caption
+            return (image, caption, photo.bubbleSize)
+        }
 
         Task {
+            // Mark all as uploading
+            for index in selectedImages.indices {
+                selectedImages[index].uploadState = .uploading
+            }
+
             let result = await viewModel.uploadPhotos(images: photosToUpload)
 
             if result.failureCount == 0 {
-                // All succeeded — dismiss
+                for index in selectedImages.indices {
+                    selectedImages[index].uploadState = .success
+                }
                 HapticService.shared.success()
+                try? await Task.sleep(nanoseconds: 400_000_000)
                 dismiss()
             } else if result.successCount > 0 {
-                // Partial success — remove succeeded photos, keep sheet open
-                let succeededCount = result.successCount
-                selectedImages = Array(selectedImages.dropFirst(succeededCount))
+                // Mark succeeded
+                for index in 0..<min(result.successCount, selectedImages.count) {
+                    selectedImages[index].uploadState = .success
+                }
+                // Mark failed
+                for index in result.successCount..<selectedImages.count {
+                    selectedImages[index].uploadState = .failed
+                }
+                HapticService.shared.warning()
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                // Remove succeeded, keep failed
+                selectedImages = selectedImages.filter { $0.uploadState != .success }
                 selectedItems = []
+            } else {
+                for index in selectedImages.indices {
+                    selectedImages[index].uploadState = .failed
+                }
+                HapticService.shared.warning()
             }
-            // All failed — keep sheet open (error alert shown by VM)
         }
     }
-}
-
-// MARK: - Selected Photo Model
-
-struct SelectedPhoto: Identifiable {
-    let id = UUID()
-    let image: UIImage
-    var caption: String = ""
-    var bubbleSize: BubbleSize = .medium
 }
 
 // MARK: - Selected Photo Card
 
 struct SelectedPhotoCard: View {
     @Binding var photo: SelectedPhoto
+    var focusedCaptionID: FocusState<UUID?>.Binding
     let onRemove: () -> Void
+
+    private var isFocused: Bool {
+        focusedCaptionID.wrappedValue == photo.id
+    }
 
     var body: some View {
         VStack(spacing: 12) {
             // Photo preview with remove button
             ZStack(alignment: .topTrailing) {
-                Image(uiImage: photo.image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(height: 150)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                if let image = photo.image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(height: 150)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .overlay(uploadStateOverlay)
+                } else {
+                    // Shimmer placeholder while loading
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(TessaColors.inputBackground)
+                        .frame(height: 150)
+                        .shimmer()
+                }
 
                 Button(action: onRemove) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.title2)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(TessaColors.textPrimary)
                         .shadow(radius: 2)
                 }
                 .padding(8)
+                .accessibilityLabel("Remove photo")
             }
 
             // Caption input
-            TextField("Add a caption...", text: $photo.caption)
-                .textFieldStyle(.plain)
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(Color.white.opacity(0.1))
-                )
-                .foregroundStyle(.white)
+            if photo.isLoaded {
+                TextField("Add a caption...", text: $photo.caption, prompt: Text("Add a caption...").foregroundStyle(TessaColors.textTertiary))
+                    .font(TessaTypography.body)
+                    .textFieldStyle(.plain)
+                    .tint(TessaColors.coral)
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(TessaColors.inputBackground)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .strokeBorder(isFocused ? TessaColors.coral.opacity(0.6) : .clear, lineWidth: 1)
+                            )
+                    )
+                    .contentShape(Rectangle())
+                    .foregroundStyle(TessaColors.textPrimary)
+                    .focused(focusedCaptionID, equals: photo.id)
+                    .autocorrectionDisabled()
+                    .submitLabel(.done)
+                    .onSubmit { focusedCaptionID.wrappedValue = nil }
+                    .accessibilityLabel("Photo caption")
 
-            // Bubble size picker
-            HStack(spacing: 12) {
-                Text("Size:")
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.7))
+                // Bubble size picker
+                HStack(spacing: 12) {
+                    Text("Size:")
+                        .font(TessaTypography.caption)
+                        .foregroundStyle(TessaColors.textSecondary)
 
-                Picker("Bubble Size", selection: $photo.bubbleSize) {
-                    ForEach(BubbleSize.allCases, id: \.self) { size in
-                        Text(size.displayName).tag(size)
+                    Picker("Bubble Size", selection: $photo.bubbleSize) {
+                        ForEach(BubbleSize.allCases, id: \.self) { size in
+                            Text(size.displayName).tag(size)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityLabel("Photo display size")
+                    .onChange(of: photo.bubbleSize) { _, _ in
+                        HapticService.shared.selection()
                     }
                 }
-                .pickerStyle(.segmented)
             }
         }
         .padding()
         .background(
             RoundedRectangle(cornerRadius: 16)
                 .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .strokeBorder(TessaColors.cardBorder, lineWidth: 0.5)
+                )
         )
+    }
+
+    @ViewBuilder
+    private var uploadStateOverlay: some View {
+        switch photo.uploadState {
+        case .uploading:
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.black.opacity(0.4))
+                .overlay(
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                )
+        case .success:
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.green.opacity(0.3))
+                .overlay(
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.largeTitle)
+                        .foregroundStyle(.green)
+                )
+                .transition(.opacity)
+        case .failed:
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.red.opacity(0.3))
+                .overlay(
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .font(.largeTitle)
+                        .foregroundStyle(.red)
+                )
+        case .pending:
+            EmptyView()
+        }
     }
 }
 

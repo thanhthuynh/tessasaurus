@@ -8,12 +8,20 @@ import SwiftUI
 struct PhotoDetailView: View {
     let photo: Photo
     let image: UIImage?
+    let imageLoader: ((Photo) async -> UIImage?)?
+    let isUploaderMode: Bool
     let onDismiss: () -> Void
+    var onUpdateCaption: ((String?) -> Void)?
 
+    @State private var asyncImage: UIImage?
     @State private var scale: CGFloat = 1.0
     @State private var offset: CGSize = .zero
     @State private var dragOffset: CGSize = .zero
     @GestureState private var magnificationState: CGFloat = 1.0
+
+    @State private var editedCaption: String = ""
+    @State private var isEditingCaption: Bool = false
+    @FocusState private var isCaptionFocused: Bool
 
     private let haptics = HapticService.shared
     private let dismissThreshold: CGFloat = 100
@@ -35,7 +43,11 @@ struct PhotoDetailView: View {
                 .background(.ultraThinMaterial.opacity(0.5))
                 .ignoresSafeArea()
                 .onTapGesture {
-                    onDismiss()
+                    if isEditingCaption {
+                        saveCaption()
+                    } else {
+                        onDismiss()
+                    }
                 }
 
             VStack(spacing: 24) {
@@ -43,24 +55,8 @@ struct PhotoDetailView: View {
 
                 photoContent
 
-                // Caption in glass card
-                if let caption = photo.caption {
-                    Text(caption)
-                        .font(TessaTypography.cardTitle)
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16)
-                                .fill(.ultraThinMaterial)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16)
-                                        .stroke(TessaColors.cardBorder, lineWidth: 1)
-                                )
-                        )
-                        .padding(.horizontal, 32)
-                }
+                // Caption section
+                captionSection
 
                 if let date = photo.createdAt as Date? {
                     VStack(spacing: 4) {
@@ -79,14 +75,118 @@ struct PhotoDetailView: View {
                 dismissHint
             }
         }
-        .gesture(dragGesture)
+        .gesture(isEditingCaption ? nil : dragGesture)
         .accessibilityAction(named: "Dismiss") { onDismiss() }
+        .onAppear {
+            editedCaption = photo.caption ?? ""
+        }
+        .task {
+            if image == nil, let loader = imageLoader {
+                asyncImage = await loader(photo)
+            }
+        }
+    }
+
+    // MARK: - Caption Section
+
+    @ViewBuilder
+    private var captionSection: some View {
+        if isUploaderMode {
+            if isEditingCaption {
+                // Editing mode
+                VStack(spacing: 12) {
+                    TextField("Add a caption...", text: $editedCaption)
+                        .font(TessaTypography.cardTitle)
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .tint(TessaColors.coral)
+                        .focused($isCaptionFocused)
+                        .submitLabel(.done)
+                        .onSubmit { saveCaption() }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16)
+                                .fill(.ultraThinMaterial)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16)
+                                        .stroke(TessaColors.coral.opacity(0.6), lineWidth: 1)
+                                )
+                        )
+                        .padding(.horizontal, 32)
+
+                    HStack(spacing: 16) {
+                        Button("Cancel") {
+                            editedCaption = photo.caption ?? ""
+                            isEditingCaption = false
+                            isCaptionFocused = false
+                        }
+                        .font(TessaTypography.detail)
+                        .foregroundStyle(TessaColors.textSecondary)
+
+                        Button("Save") {
+                            saveCaption()
+                        }
+                        .font(TessaTypography.detail.weight(.semibold))
+                        .foregroundStyle(TessaColors.coral)
+                    }
+                }
+            } else {
+                // Display mode — tappable to edit
+                Button {
+                    isEditingCaption = true
+                    isCaptionFocused = true
+                    haptics.lightTap()
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(photo.caption ?? "Tap to add caption")
+                            .font(TessaTypography.cardTitle)
+                            .foregroundStyle(photo.caption != nil ? .white : .white.opacity(0.4))
+                            .multilineTextAlignment(.center)
+
+                        Image(systemName: "pencil")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(.ultraThinMaterial)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .stroke(TessaColors.cardBorder, lineWidth: 1)
+                            )
+                    )
+                }
+                .padding(.horizontal, 32)
+            }
+        } else {
+            // Viewer mode — read-only
+            if let caption = photo.caption {
+                Text(caption)
+                    .font(TessaTypography.cardTitle)
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(.ultraThinMaterial)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .stroke(TessaColors.cardBorder, lineWidth: 1)
+                            )
+                    )
+                    .padding(.horizontal, 32)
+            }
+        }
     }
 
     @ViewBuilder
     private var photoContent: some View {
         Group {
-            if let uiImage = image {
+            if let uiImage = image ?? asyncImage {
                 Image(uiImage: uiImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
@@ -131,6 +231,19 @@ struct PhotoDetailView: View {
             .foregroundStyle(TessaColors.textTertiary)
             .padding(.bottom, 40)
     }
+
+    // MARK: - Actions
+
+    private func saveCaption() {
+        let newCaption = editedCaption.trimmingCharacters(in: .whitespacesAndNewlines)
+        let caption: String? = newCaption.isEmpty ? nil : newCaption
+        onUpdateCaption?(caption)
+        isEditingCaption = false
+        isCaptionFocused = false
+        haptics.lightTap()
+    }
+
+    // MARK: - Gestures
 
     private var magnificationGesture: some Gesture {
         MagnifyGesture()
@@ -181,6 +294,8 @@ struct PhotoDetailView: View {
     PhotoDetailView(
         photo: Photo.samples[0],
         image: nil,
+        imageLoader: nil,
+        isUploaderMode: true,
         onDismiss: {}
     )
 }

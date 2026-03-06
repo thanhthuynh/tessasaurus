@@ -22,8 +22,6 @@ final class PhotoWallViewModel {
     var errorMessage: String?
     var showError = false
     var isUploaderMode = false
-    private(set) var loadedImageIDs: Set<UUID> = []
-
     private let cloudService = CloudKitPhotoService.shared
     private let storageService = PhotoStorageService.shared
     private let cacheService = ImageCacheService.shared
@@ -31,8 +29,6 @@ final class PhotoWallViewModel {
     // Key for storing uploader mode preference
     private let uploaderModeKey = "isUploaderMode"
 
-    // Concurrent operation guards
-    private var isPreloading = false
     private var needsRefreshAfterUpload = false
 
     init() {
@@ -106,7 +102,6 @@ final class PhotoWallViewModel {
                 cacheService.setThumbnail(image, forKey: photo.id.uuidString)
                 // Also cache full-res for immediate detail view access
                 cacheService.setImage(image, forKey: photo.id.uuidString)
-                loadedImageIDs.insert(photo.id)
 
                 successCount += 1
             } catch {
@@ -132,6 +127,48 @@ final class PhotoWallViewModel {
         return UploadResult(successCount: successCount, failureCount: failureCount)
     }
 
+    // MARK: - TEMPORARY: Delete All Photos (remove after use)
+    var isDeletingAll = false
+    var deleteAllProgress: String?
+
+    func deleteAllPhotos() async {
+        guard !isDeletingAll else { return }
+        isDeletingAll = true
+        deleteAllProgress = "Fetching photos from CloudKit..."
+
+        do {
+            // Fetch all record IDs from CloudKit
+            let allPhotos = try await cloudService.fetchAllPhotos()
+            let total = allPhotos.count
+
+            if total == 0 {
+                deleteAllProgress = "No photos found."
+                isDeletingAll = false
+                return
+            }
+
+            deleteAllProgress = "Deleting \(total) photos..."
+
+            for (index, photo) in allPhotos.enumerated() {
+                try await cloudService.deletePhoto(photo)
+                deleteAllProgress = "Deleted \(index + 1)/\(total)..."
+            }
+
+            // Clear local state
+            photos.removeAll()
+            cacheService.clearCache()
+            try? storageService.savePhotosMetadata([])
+
+            deleteAllProgress = "Done! All \(total) photos deleted."
+        } catch {
+            deleteAllProgress = "Error: \(error.localizedDescription)"
+            handleError(error)
+        }
+
+        isDeletingAll = false
+    }
+    // MARK: - END TEMPORARY
+
     func deletePhoto(_ photo: Photo) async {
         do {
             try await cloudService.deletePhoto(photo)
@@ -150,17 +187,25 @@ final class PhotoWallViewModel {
         }
     }
 
-    /// Returns thumbnail for constellation view
-    func image(for photo: Photo) -> UIImage? {
-        // Touch observed set so SwiftUI re-renders when new images load
-        _ = loadedImageIDs.contains(photo.id)
-        return cacheService.thumbnail(forKey: photo.id.uuidString)
-            ?? cacheService.image(forKey: photo.id.uuidString)
+    func updateCaption(for photo: Photo, newCaption: String?) async {
+        let oldCaption = photo.caption
+        if let index = photos.firstIndex(where: { $0.id == photo.id }) {
+            photos[index].caption = newCaption
+        }
+        do {
+            try await cloudService.updatePhotoCaption(photo, newCaption: newCaption)
+            try? storageService.savePhotosMetadata(photos)
+        } catch {
+            // Revert on failure
+            if let index = photos.firstIndex(where: { $0.id == photo.id }) {
+                photos[index].caption = oldCaption
+            }
+            handleError(error)
+        }
     }
 
-    /// Returns full-resolution image for detail view
+    /// Returns full-resolution image for detail view (sync, from cache only)
     func fullResolutionImage(for photo: Photo) -> UIImage? {
-        _ = loadedImageIDs.contains(photo.id)
         return cacheService.image(forKey: photo.id.uuidString)
     }
 
@@ -172,18 +217,16 @@ final class PhotoWallViewModel {
 
         // Check local storage on background thread
         let fileName = photo.localFileName
-        let storageService = self.storageService
         let diskImage: UIImage? = await Task.detached(priority: .userInitiated) {
             guard let fileName else { return nil }
-            return storageService.loadImage(fileName: fileName)
+            let storage = PhotoStorageService.shared
+            return storage.loadImage(fileName: fileName)
         }.value
 
         if let diskImage {
             // Generate and cache thumbnail
             cacheService.setThumbnail(diskImage, forKey: photo.id.uuidString)
             cacheService.setImage(diskImage, forKey: photo.id.uuidString)
-            loadedImageIDs.insert(photo.id)
-
             // Save thumbnail to disk for next launch
             if let fileName {
                 try? storageService.saveThumbnail(diskImage, fileName: fileName)
@@ -197,36 +240,13 @@ final class PhotoWallViewModel {
             if let cloudImage = try await cloudService.fetchImageForPhoto(photo) {
                 cacheService.setThumbnail(cloudImage, forKey: photo.id.uuidString)
                 cacheService.setImage(cloudImage, forKey: photo.id.uuidString)
-                loadedImageIDs.insert(photo.id)
                 return cloudImage
             }
         } catch {
-            // Non-fatal — photo stays as placeholder
+            print("[PhotoWall] CloudKit fallback failed for photo \(photo.id): \(error.localizedDescription)")
         }
 
         return nil
-    }
-
-    func preloadImages() async {
-        guard !isPreloading else { return }
-        isPreloading = true
-        defer { isPreloading = false }
-
-        let unloaded = photos.filter { image(for: $0) == nil }
-        let maxConcurrent = 4
-
-        for batch in stride(from: 0, to: unloaded.count, by: maxConcurrent) {
-            let end = min(batch + maxConcurrent, unloaded.count)
-            let slice = unloaded[batch..<end]
-
-            await withTaskGroup(of: Void.self) { group in
-                for photo in slice {
-                    group.addTask {
-                        _ = await self.loadImageAsync(for: photo)
-                    }
-                }
-            }
-        }
     }
 
     func toggleUploaderMode() {
@@ -236,7 +256,6 @@ final class PhotoWallViewModel {
 
     func refresh() async {
         await loadPhotos()
-        await preloadImages()
     }
 
     // MARK: - Private Methods
