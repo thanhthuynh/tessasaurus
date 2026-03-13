@@ -36,8 +36,7 @@ struct PhotoBubble: View {
     }
 
     var body: some View {
-        Button(action: onTap) {
-            ZStack {
+        ZStack {
                 // Glow aura
                 Circle()
                     .fill(TessaGradients.photoGlow(color: glowColor))
@@ -75,10 +74,11 @@ struct PhotoBubble: View {
                     )
                     .shadow(color: TessaColors.primary.opacity(0.3), radius: 10, x: 0, y: 4)
             }
-        }
-        .buttonStyle(BubbleButtonStyle())
+        .contentShape(Circle())
+        .onTapGesture { onTap() }
         .scaleEffect(pulseScale * depthScale)
         .accessibilityLabel(photo.caption ?? "Photo")
+        .accessibilityAddTraits(.isButton)
         .task(id: photo.id) {
             let image = await imageLoader(photo)
             withAnimation(.easeIn(duration: 0.3)) {
@@ -143,14 +143,6 @@ struct PhotoBubble: View {
         withAnimation(.linear(duration: 4).repeatForever(autoreverses: false)) {
             shimmerRotation = 360
         }
-    }
-}
-
-struct BubbleButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.92 : 1.0)
-            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: configuration.isPressed)
     }
 }
 

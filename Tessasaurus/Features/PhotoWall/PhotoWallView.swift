@@ -7,6 +7,7 @@ import SwiftUI
 
 struct PhotoWallView: View {
     @Binding var showTabBar: Bool
+    @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel = PhotoWallViewModel()
     @State private var selectedPhoto: Photo?
     @State private var showAddPhotoSheet = false
@@ -115,6 +116,11 @@ struct PhotoWallView: View {
             }
         }
         // END TEMPORARY
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                Task { await viewModel.refresh() }
+            }
+        }
         .onChange(of: selectedPhoto) { _, newValue in
             withAnimation {
                 showTabBar = newValue == nil

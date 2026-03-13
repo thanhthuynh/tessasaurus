@@ -31,10 +31,31 @@ final class PhotoWallViewModel {
 
     private var needsRefreshAfterUpload = false
     private var inFlightLoads: [UUID: Task<UIImage?, Never>] = [:]
+    nonisolated(unsafe) private var notificationObserver: Any?
 
     init() {
         isUploaderMode = UserDefaults.standard.bool(forKey: uploaderModeKey)
         loadCachedPhotos()
+        setupNotificationObserver()
+    }
+
+    deinit {
+        if let observer = notificationObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    private func setupNotificationObserver() {
+        notificationObserver = NotificationCenter.default.addObserver(
+            forName: .photosDidUpdate,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                await self.refresh()
+            }
+        }
     }
 
     // MARK: - Public Methods
@@ -54,10 +75,19 @@ final class PhotoWallViewModel {
             // Check iCloud account status
             let status = try await cloudService.checkAccountStatus()
             guard status == .available else {
-                if status == .noAccount {
+                switch status {
+                case .noAccount:
                     errorMessage = "Sign in to iCloud in Settings to sync photos"
-                    showError = true
+                case .restricted:
+                    errorMessage = "iCloud access is restricted on this device"
+                case .temporarilyUnavailable:
+                    errorMessage = "iCloud is temporarily unavailable. Please try again later."
+                case .couldNotDetermine:
+                    errorMessage = "Unable to determine iCloud status. Check your internet connection."
+                default:
+                    errorMessage = "iCloud is not available. Please check Settings."
                 }
+                showError = true
                 isLoading = false
                 return
             }
@@ -327,7 +357,32 @@ final class PhotoWallViewModel {
     }
 
     private func handleError(_ error: Error) {
-        errorMessage = error.localizedDescription
+        if let ckError = error as? CKError {
+            switch ckError.code {
+            case .networkUnavailable, .networkFailure:
+                errorMessage = "No internet connection. Please check your network and try again."
+            case .notAuthenticated:
+                errorMessage = "Sign in to iCloud in Settings to sync photos."
+            case .permissionFailure:
+                errorMessage = "iCloud permission denied. Check iCloud Drive is enabled in Settings."
+            case .quotaExceeded:
+                errorMessage = "iCloud storage is full. Free up space to continue syncing."
+            case .serviceUnavailable, .requestRateLimited:
+                errorMessage = "iCloud is busy. Please try again in a moment."
+            case .zoneBusy:
+                errorMessage = "iCloud is processing changes. Please try again shortly."
+            case .incompatibleVersion:
+                errorMessage = "Please update the app to the latest version."
+            case .assetFileNotFound, .assetNotAvailable:
+                errorMessage = "Photo data is unavailable. Try refreshing."
+            case .serverResponseLost:
+                errorMessage = "Connection to iCloud was interrupted. Please try again."
+            default:
+                errorMessage = "iCloud error: \(ckError.localizedDescription)"
+            }
+        } else {
+            errorMessage = error.localizedDescription
+        }
         showError = true
     }
 }
