@@ -161,6 +161,36 @@ final class PhotoWallViewModel {
         return UploadResult(successCount: successCount, failureCount: failureCount)
     }
 
+    /// Upload a single photo without managing isUploading/uploadProgress.
+    /// Caller is responsible for batch state management.
+    func uploadSinglePhoto(image: UIImage, caption: String?, size: BubbleSize) async -> Bool {
+        do {
+            let photo = try await cloudService.uploadPhoto(
+                image: image,
+                caption: caption,
+                bubbleSize: size
+            )
+            photos.insert(photo, at: 0)
+            cacheService.setThumbnail(image, forKey: photo.id.uuidString)
+            cacheService.setImage(image, forKey: photo.id.uuidString)
+            return true
+        } catch {
+            handleError(error)
+            return false
+        }
+    }
+
+    /// Save metadata and handle deferred refresh after a batch upload completes.
+    func finalizeUpload() async {
+        try? storageService.savePhotosMetadata(photos)
+        isUploading = false
+        uploadProgress = 0
+        if needsRefreshAfterUpload {
+            needsRefreshAfterUpload = false
+            await refresh()
+        }
+    }
+
     // MARK: - TEMPORARY: Delete All Photos (remove after use)
     var isDeletingAll = false
     var deleteAllProgress: String?

@@ -16,10 +16,11 @@ enum PhotoUploadState {
 
 struct SelectedPhoto: Identifiable {
     let id = UUID()
-    var image: UIImage?
+    var thumbnail: UIImage?
+    var imageData: Data?
     var caption: String = ""
     var uploadState: PhotoUploadState = .pending
-    var isLoaded: Bool { image != nil }
+    var isLoaded: Bool { thumbnail != nil }
 }
 
 // MARK: - Add Photo Sheet
@@ -81,9 +82,17 @@ struct AddPhotoSheet: View {
                         }
                         .fontWeight(.semibold)
                         .foregroundStyle(TessaGradients.sunrise)
-                        .disabled(viewModel.isUploading || selectedImages.contains { $0.image == nil })
+                        .disabled(viewModel.isUploading || selectedImages.contains { $0.thumbnail == nil })
                         .accessibilityLabel("Upload \(loadedCount) photos")
                     }
+                }
+
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        focusedCaptionID = nil
+                    }
+                    .foregroundStyle(TessaColors.coral)
                 }
             }
             .toolbarBackground(TessaColors.primary.opacity(0.8), for: .navigationBar)
@@ -158,7 +167,7 @@ struct AddPhotoSheet: View {
             }
 
             ScrollView {
-                VStack(spacing: 16) {
+                LazyVStack(spacing: 16) {
                     ForEach($selectedImages) { $photo in
                         SelectedPhotoCard(
                             photo: $photo,
@@ -226,33 +235,31 @@ struct AddPhotoSheet: View {
         selectedImages = placeholders
 
         loadingTask = Task {
-            // Load all images concurrently
-            let loadedImages: [(Int, UIImage?)] = await withTaskGroup(of: (Int, UIImage?).self) { group in
+            // Load images concurrently, update UI incrementally as each completes
+            await withTaskGroup(of: (Int, Data?, UIImage?).self) { group in
                 for (index, item) in items.enumerated() {
                     group.addTask {
-                        guard !Task.isCancelled else { return (index, nil) }
-                        if let data = try? await item.loadTransferable(type: Data.self),
-                           let uiImage = UIImage(data: data) {
-                            return (index, uiImage)
+                        guard !Task.isCancelled else { return (index, nil, nil) }
+                        guard let data = try? await item.loadTransferable(type: Data.self) else {
+                            return (index, nil, nil)
                         }
-                        return (index, nil)
+                        let thumbnail = ImageCacheService.downsampleFromData(data, maxPixelDimension: 450)
+                        return (index, data, thumbnail)
                     }
                 }
-                var results: [(Int, UIImage?)] = []
-                for await result in group {
-                    results.append(result)
+                for await (index, data, thumbnail) in group {
+                    guard !Task.isCancelled else { return }
+                    await MainActor.run {
+                        guard index < selectedImages.count else { return }
+                        selectedImages[index].imageData = data
+                        selectedImages[index].thumbnail = thumbnail
+                    }
                 }
-                return results
             }
 
             guard !Task.isCancelled else { return }
 
             await MainActor.run {
-                // Batch update: assign all images at once
-                for (index, image) in loadedImages {
-                    guard index < selectedImages.count else { continue }
-                    selectedImages[index].image = image
-                }
                 // Remove entries that failed to load
                 selectedImages.removeAll { !$0.isLoaded }
                 isLoadingImages = false
@@ -269,49 +276,59 @@ struct AddPhotoSheet: View {
     }
 
     private func uploadPhotos() {
-        let photosToUpload: [(UIImage, String?, BubbleSize)] = selectedImages.enumerated().compactMap { index, photo in
-            guard let image = photo.image else { return nil }
-            let caption: String? = photo.caption.isEmpty ? nil : photo.caption
-            let autoSize = BubbleSize.autoAssign(
-                photoCount: viewModel.photos.count + index,
-                aspectRatio: CGFloat(image.size.width / image.size.height)
-            )
-            return (image, caption, autoSize)
-        }
-
         Task {
             // Mark all as uploading
             for index in selectedImages.indices {
                 selectedImages[index].uploadState = .uploading
             }
 
-            let result = await viewModel.uploadPhotos(images: photosToUpload)
+            viewModel.isUploading = true
+            viewModel.uploadProgress = 0
 
-            if result.failureCount == 0 {
-                for index in selectedImages.indices {
-                    selectedImages[index].uploadState = .success
+            var totalSuccess = 0
+            var totalFailure = 0
+            let totalCount = selectedImages.count
+
+            // Upload one photo at a time to keep peak memory low
+            for (index, photo) in selectedImages.enumerated() {
+                guard let data = photo.imageData,
+                      let fullImage = UIImage(data: data) else {
+                    selectedImages[index].uploadState = .failed
+                    totalFailure += 1
+                    viewModel.uploadProgress = Double(index + 1) / Double(totalCount)
+                    continue
                 }
+                let caption: String? = photo.caption.isEmpty ? nil : photo.caption
+                let autoSize = BubbleSize.autoAssign(
+                    photoCount: viewModel.photos.count + totalSuccess,
+                    aspectRatio: CGFloat(fullImage.size.width / fullImage.size.height)
+                )
+                let success = await viewModel.uploadSinglePhoto(image: fullImage, caption: caption, size: autoSize)
+                // fullImage released after this scope
+
+                if success {
+                    selectedImages[index].uploadState = .success
+                    totalSuccess += 1
+                } else {
+                    selectedImages[index].uploadState = .failed
+                    totalFailure += 1
+                }
+                viewModel.uploadProgress = Double(index + 1) / Double(totalCount)
+            }
+
+            await viewModel.finalizeUpload()
+
+            if totalFailure == 0 {
                 HapticService.shared.success()
                 try? await Task.sleep(nanoseconds: 400_000_000)
                 dismiss()
-            } else if result.successCount > 0 {
-                // Mark succeeded
-                for index in 0..<min(result.successCount, selectedImages.count) {
-                    selectedImages[index].uploadState = .success
-                }
-                // Mark failed
-                for index in result.successCount..<selectedImages.count {
-                    selectedImages[index].uploadState = .failed
-                }
+            } else if totalSuccess > 0 {
                 HapticService.shared.warning()
                 try? await Task.sleep(nanoseconds: 600_000_000)
                 // Remove succeeded, keep failed
                 selectedImages = selectedImages.filter { $0.uploadState != .success }
                 selectedItems = []
             } else {
-                for index in selectedImages.indices {
-                    selectedImages[index].uploadState = .failed
-                }
                 HapticService.shared.warning()
             }
         }
@@ -333,8 +350,8 @@ struct SelectedPhotoCard: View {
         VStack(spacing: 12) {
             // Photo preview with remove button
             ZStack(alignment: .topTrailing) {
-                if let image = photo.image {
-                    Image(uiImage: image)
+                if let thumbnail = photo.thumbnail {
+                    Image(uiImage: thumbnail)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                         .frame(height: 150)

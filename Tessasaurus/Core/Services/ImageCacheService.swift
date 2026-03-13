@@ -4,6 +4,7 @@
 //
 
 import UIKit
+import ImageIO
 
 final class ImageCacheService {
     static let shared = ImageCacheService()
@@ -56,6 +57,24 @@ final class ImageCacheService {
 
     func clearCache() {
         cache.removeAllObjects()
+    }
+
+    /// Downsample directly from compressed Data using ImageIO — never allocates the full bitmap.
+    static func downsampleFromData(_ data: Data, maxPixelDimension: CGFloat) -> UIImage? {
+        let options: [CFString: Any] = [kCGImageSourceShouldCache: false]
+        guard let source = CGImageSourceCreateWithData(data as CFData, options as CFDictionary) else {
+            return nil
+        }
+        let downsampleOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelDimension
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, downsampleOptions as CFDictionary) else {
+            return nil
+        }
+        return UIImage(cgImage: cgImage)
     }
 
     private func downsample(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
