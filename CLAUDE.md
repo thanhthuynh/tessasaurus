@@ -23,16 +23,16 @@ xcodebuild -project Tessasaurus.xcodeproj -scheme Tessasaurus clean
 ### Testing
 ```bash
 # Run all tests
-xcodebuild test -project Tessasaurus.xcodeproj -scheme Tessasaurus -destination 'platform=iOS Simulator,name=iPhone 16'
+xcodebuild test -project Tessasaurus.xcodeproj -scheme Tessasaurus -destination 'platform=iOS Simulator,name=iPhone 17'
 
 # Run only unit tests
-xcodebuild test -project Tessasaurus.xcodeproj -scheme Tessasaurus -destination 'platform=iOS Simulator,name=iPhone 16' -only-testing:TessasaurusTests
+xcodebuild test -project Tessasaurus.xcodeproj -scheme Tessasaurus -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:TessasaurusTests
 
 # Run only UI tests
-xcodebuild test -project Tessasaurus.xcodeproj -scheme Tessasaurus -destination 'platform=iOS Simulator,name=iPhone 16' -only-testing:TessasaurusUITests
+xcodebuild test -project Tessasaurus.xcodeproj -scheme Tessasaurus -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:TessasaurusUITests
 
 # Run a specific test (pattern: TargetName/TestClassName/testMethodName)
-xcodebuild test -project Tessasaurus.xcodeproj -scheme Tessasaurus -destination 'platform=iOS Simulator,name=iPhone 16' -only-testing:TessasaurusTests/TessasaurusTests/example
+xcodebuild test -project Tessasaurus.xcodeproj -scheme Tessasaurus -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:TessasaurusTests/BubbleSizeTests/scaleForSmall
 ```
 
 ### Running
@@ -49,7 +49,7 @@ xcrun simctl list devices available
 ### Project File Tree
 ```
 Tessasaurus/
-├── TessasaurusApp.swift                    # App entry point (@main)
+├── TessasaurusApp.swift                    # App entry point (@main) + AppDelegate (push notifications)
 ├── ContentView.swift                        # Root view — FloatingTabBar + opacity-based tab switching
 ├── Info.plist
 ├── Tessasaurus.entitlements
@@ -61,66 +61,64 @@ Tessasaurus/
 │   ├── Theme/
 │   │   ├── TessaColors.swift                # Color tokens — NEVER hardcode colors
 │   │   ├── TessaGradients.swift             # Gradient tokens — NEVER hardcode gradients
-│   │   └── TessaTypography.swift            # Typography tokens — NEVER hardcode fonts
+│   │   ├── TessaTypography.swift            # Typography tokens — NEVER hardcode fonts
+│   │   └── TessaAnimations.swift            # Animation presets (spring, fanOut)
 │   ├── Components/
 │   │   ├── FloatingTabBar.swift             # Custom tab bar (used in ContentView)
 │   │   ├── GlassCard.swift                  # Glassmorphism card component
+│   │   ├── ConfettiView.swift               # Celebration particle animation
 │   │   ├── ShimmerModifier.swift            # Shimmer loading effect
 │   │   └── GradientBackground.swift         # Reusable gradient background
 │   └── Services/
-│       ├── CloudKitPhotoService.swift        # iCloud photo sync (singleton)
-│       ├── PhotoStorageService.swift         # Local photo storage (singleton)
-│       ├── ImageCacheService.swift           # In-memory image cache (singleton)
+│       ├── CloudKitPhotoService.swift        # iCloud photo sync (singleton, publicCloudDatabase)
+│       ├── PhotoStorageService.swift         # Local photo/thumbnail storage (singleton)
+│       ├── ImageCacheService.swift           # Split thumbnail/full-res image cache (singleton)
 │       ├── HapticService.swift              # Haptic feedback patterns (singleton)
-│       ├── PersistenceService.swift         # UserDefaults persistence
-│       └── DateService.swift                # Date calculations for countdown
+│       └── PersistenceService.swift         # UserDefaults persistence (injectable for testing)
 ├── Models/
-│   ├── Photo.swift                          # Photo model (CloudKit-backed)
-│   ├── GiftHint.swift                       # Blind box hint model
-│   └── Occasion.swift                       # Countdown occasion model
+│   ├── Photo.swift                          # Photo model + BubbleSize enum + UUID.stableHash
+│   └── Coupon.swift                         # Coupon model with SMS redemption
 └── Features/
-    ├── Home/
-    │   └── HomeView.swift
-    ├── BlindBox/
-    │   ├── BlindBoxView.swift               # Main blind box countdown UI
-    │   ├── BlindBoxViewModel.swift          # @Observable VM (no @MainActor)
-    │   ├── GiftBoxView.swift                # Individual gift box component
-    │   ├── DayProgressView.swift            # Day progress indicator
-    │   ├── CountdownBanner.swift            # Countdown display
-    │   └── ConfettiView.swift               # Celebration animation
     ├── PhotoWall/
     │   ├── PhotoWallView.swift              # Main photo constellation UI
     │   ├── PhotoWallViewModel.swift         # @Observable @MainActor VM (CloudKit async)
-    │   ├── ConstellationCanvasView.swift    # Zoomable/pannable canvas
-    │   ├── ConstellationLayout.swift        # Layout algorithm
-    │   ├── ConstellationLinesView.swift     # Connecting lines between photos
-    │   ├── PhotoBubble.swift                # Individual photo bubble
-    │   ├── PhotoDetailView.swift            # Full photo detail sheet
-    │   ├── AddPhotoSheet.swift              # Photo upload sheet
-    │   └── StarfieldBackground.swift        # Animated star background
+    │   ├── ConstellationCanvasView.swift    # Zoomable/pannable canvas with fan-out animation
+    │   ├── ConstellationLayout.swift        # Ring-based layout with collision resolution
+    │   ├── ConstellationLinesView.swift     # Connecting lines between photos (Canvas)
+    │   ├── PhotoBubble.swift                # Individual photo bubble with glow/shimmer
+    │   ├── PhotoDetailView.swift            # Full photo detail overlay (zoom/pan/dismiss)
+    │   ├── AddPhotoSheet.swift              # Photo upload sheet (PhotosPicker)
+    │   └── StarfieldBackground.swift        # Animated parallax star background (Canvas)
+    ├── Coupons/
+    │   ├── CouponsView.swift                # Coupon list with redeem confirmation + confetti
+    │   ├── CouponsViewModel.swift           # @Observable VM (injectable PersistenceService)
+    │   └── CouponCardView.swift             # Individual coupon card (GlassCard)
     └── Onboarding/
-        ├── OnboardingView.swift
-        └── OnboardingMessages.swift
+        ├── OnboardingView.swift             # 3-phase onboarding (title → messages → transition)
+        └── OnboardingMessages.swift         # Bilingual Chinese/English content
 
 TessasaurusTests/
-└── TessasaurusTests.swift                   # Swift Testing framework (@Test, async/await)
+├── TessasaurusTests.swift                   # PersistenceService + Coupon model tests
+├── ModelTests.swift                         # BubbleSize, UUID.stableHash, Photo equality/Codable
+├── LayoutTests.swift                        # ConstellationLayout + ConstellationEdge tests
+└── ServiceAndViewModelTests.swift           # ImageCacheService downsample + CouponsViewModel tests
 
 TessasaurusUITests/
-├── TessasaurusUITests.swift                 # XCTest UI tests (XCUIApplication)
-└── TessasaurusUITestsLaunchTests.swift      # Launch performance tests
+├── TessasaurusUITests.swift                 # XCTest UI tests (tab nav, photo wall, coupons)
+└── TessasaurusUITestsLaunchTests.swift      # Launch screenshot tests
 ```
 
 ### Established Patterns (MUST follow in all new code)
 
-1. **`@Observable` macro** (NOT `ObservableObject`/`@Published`) — `BlindBoxViewModel.swift:9`, `PhotoWallViewModel.swift:10`
+1. **`@Observable` macro** (NOT `ObservableObject`/`@Published`) — `PhotoWallViewModel.swift:16`, `CouponsViewModel.swift:8`
 
-2. **`@MainActor` on ViewModels with async/CloudKit work** — `PhotoWallViewModel.swift:11` uses `@MainActor` because it does async CloudKit operations. Lighter VMs like `BlindBoxViewModel` omit it.
+2. **`@MainActor` on ViewModels with async/CloudKit work** — `PhotoWallViewModel.swift:17` uses `@MainActor` because it does async CloudKit operations. Lighter VMs like `CouponsViewModel` omit it.
 
 3. **Singleton services via `static let shared`** — All services use this pattern:
    - `HapticService.shared` — `HapticService.swift:9`
-   - `CloudKitPhotoService.shared` — `CloudKitPhotoService.swift:10`
+   - `CloudKitPhotoService.shared` — `CloudKitPhotoService.swift:11`
    - `PhotoStorageService.shared` — `PhotoStorageService.swift:9`
-   - `ImageCacheService.shared` — `ImageCacheService.swift:9`
+   - `ImageCacheService.shared` — `ImageCacheService.swift:12`
 
 4. **Design system tokens** — `TessaColors`, `TessaGradients`, `TessaTypography` enums. NEVER hardcode colors, gradients, or font styles.
 
@@ -128,13 +126,25 @@ TessasaurusUITests/
 
 6. **Spring animations** — `.spring(response: 0.35, dampingFraction: 0.8)` — `ContentView.swift:31`
 
-7. **Error handling pattern** — `errorMessage: String?` + `showError: Bool` on ViewModel, surfaced via `.alert` modifier — `PhotoWallViewModel.swift:17-18`, `PhotoWallViewModel.swift:184-187`
+7. **Error handling pattern** — `errorMessage: String?` + `showError: Bool` on ViewModel, surfaced via `.alert` modifier — `PhotoWallViewModel.swift:23-24`
 
-8. **Haptic feedback via `HapticService.shared`** for user interactions — `BlindBoxViewModel.swift:56,64,70,79`
+8. **Haptic feedback via `HapticService.shared`** for user interactions — `CouponsViewModel.swift:48,54,63`, `PhotoWallView.swift:197`
 
-### Testing Frameworks
-- **Unit Tests (`TessasaurusTests/`):** Uses Swift Testing framework with `import Testing`, `@Test` attribute, and async/await support
-- **UI Tests (`TessasaurusUITests/`):** Uses XCTest framework with `XCUIApplication` for UI automation
+9. **Structured logging via `os.Logger`** — Use `Logger(subsystem:category:)` instead of `print()`. See `PhotoWallViewModel.swift:30`, `CloudKitPhotoService.swift:12`.
+
+10. **ID-based selection** — Use `selectedPhotoID: UUID?` and derive the object from the canonical array, not a copy. See `PhotoWallView.swift:12-20`.
+
+11. **Stable hashing via `UUID.stableHash`** — Do NOT use `hashValue` for deterministic behavior (it changes per launch). Use `photo.id.stableHash` instead. See `Photo.swift:107-112`.
+
+12. **DI via init parameters with defaults** — Services injected via `init(service: Type = .shared)` for testability. See `CouponsViewModel.swift:10-14`, `PersistenceService.swift`.
+
+### Testing
+
+- **Unit Tests (`TessasaurusTests/`):** Swift Testing framework — `import Testing`, `@Test`, `#expect`. 79 test cases across 4 files covering models, layout, services, and ViewModels.
+- **UI Tests (`TessasaurusUITests/`):** XCTest framework — `XCUIApplication` for UI automation. 14 tests covering tab navigation, photo wall, add photo sheet, and coupons.
+- **Test isolation:** Each test creates `UserDefaults(suiteName: "test_\(UUID())")` for state isolation — never use `.standard`.
+- **UI test launch args:** Add `-hasCompletedOnboarding YES` to skip onboarding overlay on clean simulators.
+- **Simulator:** Project targets iOS 26+ — use `iPhone 17` simulators, not `iPhone 16`.
 
 ### App Structure
 - Entry point: `TessasaurusApp` struct with `@main` attribute
