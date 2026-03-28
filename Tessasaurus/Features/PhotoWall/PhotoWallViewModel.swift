@@ -6,6 +6,7 @@
 import SwiftUI
 import CloudKit
 import Observation
+import os
 
 struct UploadResult {
     let successCount: Int
@@ -26,33 +27,33 @@ final class PhotoWallViewModel {
     private let storageService = PhotoStorageService.shared
     private let cacheService = ImageCacheService.shared
 
+    private static let logger = Logger(subsystem: "personal.thanhhuynh.Tessasaurus", category: "PhotoWall")
+
     // Key for storing uploader mode preference
     private let uploaderModeKey = "isUploaderMode"
 
     private var needsRefreshAfterUpload = false
     private var inFlightLoads: [UUID: Task<UIImage?, Never>] = [:]
-    nonisolated(unsafe) private var notificationObserver: Any?
+    // nonisolated(unsafe) is acceptable here: the property is written exactly once in init()
+    // (which completes synchronously on @MainActor before any other access is possible) and
+    // read only in deinit (for cancellation). The Task uses [weak self] and checks isCancelled.
+    nonisolated(unsafe) private var notificationTask: Task<Void, Never>?
 
     init() {
         isUploaderMode = UserDefaults.standard.bool(forKey: uploaderModeKey)
         loadCachedPhotos()
-        setupNotificationObserver()
+        startNotificationObserver()
     }
 
     deinit {
-        if let observer = notificationObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
+        notificationTask?.cancel()
     }
 
-    private func setupNotificationObserver() {
-        notificationObserver = NotificationCenter.default.addObserver(
-            forName: .photosDidUpdate,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in
+    private func startNotificationObserver() {
+        notificationTask = Task { [weak self] in
+            let notifications = NotificationCenter.default.notifications(named: .photosDidUpdate)
+            for await _ in notifications {
+                guard let self, !Task.isCancelled else { break }
                 await self.refresh()
             }
         }
@@ -96,12 +97,13 @@ final class PhotoWallViewModel {
             let cloudPhotos = try await cloudService.fetchAllPhotos()
 
             // Update local cache
-            try? storageService.savePhotosMetadata(cloudPhotos)
+            do {
+                try storageService.savePhotosMetadata(cloudPhotos)
+            } catch {
+                Self.logger.error("Failed to save photo metadata: \(error.localizedDescription)")
+            }
 
             photos = cloudPhotos
-
-            // Migrate bubble sizes for existing photos (one-time)
-            await migrateBubbleSizesIfNeeded()
 
             // Subscribe to changes if not already (non-throwing, logs errors internally)
             await cloudService.subscribeToChanges()
@@ -147,7 +149,11 @@ final class PhotoWallViewModel {
         }
 
         // Save updated metadata
-        try? storageService.savePhotosMetadata(photos)
+        do {
+            try storageService.savePhotosMetadata(photos)
+        } catch {
+            Self.logger.error("Failed to save metadata after upload: \(error.localizedDescription)")
+        }
 
         isUploading = false
         uploadProgress = 0
@@ -180,9 +186,20 @@ final class PhotoWallViewModel {
         }
     }
 
+    /// Cancel an in-progress upload and reset all upload state.
+    func cancelUpload() {
+        isUploading = false
+        uploadProgress = 0
+        needsRefreshAfterUpload = false
+    }
+
     /// Save metadata and handle deferred refresh after a batch upload completes.
     func finalizeUpload() async {
-        try? storageService.savePhotosMetadata(photos)
+        do {
+            try storageService.savePhotosMetadata(photos)
+        } catch {
+            Self.logger.error("Failed to save metadata after finalize: \(error.localizedDescription)")
+        }
         isUploading = false
         uploadProgress = 0
         if needsRefreshAfterUpload {
@@ -190,48 +207,6 @@ final class PhotoWallViewModel {
             await refresh()
         }
     }
-
-    // MARK: - TEMPORARY: Delete All Photos (remove after use)
-    var isDeletingAll = false
-    var deleteAllProgress: String?
-
-    func deleteAllPhotos() async {
-        guard !isDeletingAll else { return }
-        isDeletingAll = true
-        deleteAllProgress = "Fetching photos from CloudKit..."
-
-        do {
-            // Fetch all record IDs from CloudKit
-            let allPhotos = try await cloudService.fetchAllPhotos()
-            let total = allPhotos.count
-
-            if total == 0 {
-                deleteAllProgress = "No photos found."
-                isDeletingAll = false
-                return
-            }
-
-            deleteAllProgress = "Deleting \(total) photos..."
-
-            for (index, photo) in allPhotos.enumerated() {
-                try await cloudService.deletePhoto(photo)
-                deleteAllProgress = "Deleted \(index + 1)/\(total)..."
-            }
-
-            // Clear local state
-            photos.removeAll()
-            cacheService.clearCache()
-            try? storageService.savePhotosMetadata([])
-
-            deleteAllProgress = "Done! All \(total) photos deleted."
-        } catch {
-            deleteAllProgress = "Error: \(error.localizedDescription)"
-            handleError(error)
-        }
-
-        isDeletingAll = false
-    }
-    // MARK: - END TEMPORARY
 
     func deletePhoto(_ photo: Photo) async {
         do {
@@ -243,9 +218,11 @@ final class PhotoWallViewModel {
             cacheService.removeImage(forKey: photo.id.uuidString)
             cacheService.removeImage(forKey: "thumb_\(photo.id.uuidString)")
 
-            // Save updated metadata
-            try? storageService.savePhotosMetadata(photos)
-
+            do {
+                try storageService.savePhotosMetadata(photos)
+            } catch {
+                Self.logger.error("Failed to save metadata after delete: \(error.localizedDescription)")
+            }
         } catch {
             handleError(error)
         }
@@ -259,7 +236,11 @@ final class PhotoWallViewModel {
         }
         do {
             try await cloudService.updatePhotoBubbleSize(photo, newSize: newSize)
-            try? storageService.savePhotosMetadata(photos)
+            do {
+                try storageService.savePhotosMetadata(photos)
+            } catch {
+                Self.logger.error("Failed to save metadata after bubble size update: \(error.localizedDescription)")
+            }
         } catch {
             // Revert on failure
             if let index = photos.firstIndex(where: { $0.id == photo.id }) {
@@ -277,7 +258,11 @@ final class PhotoWallViewModel {
         }
         do {
             try await cloudService.updatePhotoCaption(photo, newCaption: newCaption)
-            try? storageService.savePhotosMetadata(photos)
+            do {
+                try storageService.savePhotosMetadata(photos)
+            } catch {
+                Self.logger.error("Failed to save metadata after caption update: \(error.localizedDescription)")
+            }
         } catch {
             // Revert on failure
             if let index = photos.firstIndex(where: { $0.id == photo.id }) {
@@ -330,7 +315,8 @@ final class PhotoWallViewModel {
                 if let fileName {
                     try? self.storageService.saveThumbnail(diskImage, fileName: fileName)
                 }
-                return self.cacheService.thumbnail(forKey: photoKey)!
+                // Return directly instead of re-fetching from cache (NSCache can evict immediately)
+                return self.cacheService.thumbnail(forKey: photoKey) ?? diskImage
             }
 
             // 4. Fallback: CloudKit
@@ -338,10 +324,11 @@ final class PhotoWallViewModel {
                 if let cloudImage = try await self.cloudService.fetchImageForPhoto(photo) {
                     self.cacheService.setThumbnail(cloudImage, forKey: photoKey)
                     self.cacheService.setImage(cloudImage, forKey: photoKey)
-                    return self.cacheService.thumbnail(forKey: photoKey)!
+                    // Return directly instead of force-unwrapping from cache
+                    return self.cacheService.thumbnail(forKey: photoKey) ?? cloudImage
                 }
             } catch {
-                print("[PhotoWall] CloudKit fallback failed for photo \(photoId): \(error.localizedDescription)")
+                Self.logger.error("CloudKit fallback failed for photo \(photoId): \(error.localizedDescription)")
             }
 
             return nil
@@ -363,21 +350,6 @@ final class PhotoWallViewModel {
     }
 
     // MARK: - Private Methods
-
-    private func migrateBubbleSizesIfNeeded() async {
-        let key = "hasRunBubbleSizeMigration"
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
-
-        for i in photos.indices {
-            photos[i].bubbleSize = BubbleSize.autoAssign(
-                photoCount: i,
-                aspectRatio: photos[i].aspectRatio
-            )
-            try? await cloudService.updatePhotoBubbleSize(photos[i], newSize: photos[i].bubbleSize)
-        }
-        try? storageService.savePhotosMetadata(photos)
-        UserDefaults.standard.set(true, forKey: key)
-    }
 
     private func loadCachedPhotos() {
         let cached = storageService.loadPhotosMetadata()

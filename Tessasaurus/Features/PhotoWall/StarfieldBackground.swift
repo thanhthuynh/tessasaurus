@@ -7,7 +7,6 @@ import SwiftUI
 
 struct StarfieldBackground: View {
     let canvasOffset: CGPoint
-    let canvasScale: CGFloat
 
     @State private var twinklePhase: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -113,5 +112,5 @@ private struct Star {
 }
 
 #Preview {
-    StarfieldBackground(canvasOffset: .zero, canvasScale: 1.0)
+    StarfieldBackground(canvasOffset: .zero)
 }

@@ -5,9 +5,11 @@
 
 import CloudKit
 import UIKit
+import os
 
 final class CloudKitPhotoService {
     static let shared = CloudKitPhotoService()
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Tessasaurus", category: "CloudKit")
 
     private let container: CKContainer
     private let database: CKDatabase
@@ -51,8 +53,8 @@ final class CloudKitPhotoService {
         // Save to CloudKit
         let savedRecord = try await database.save(record)
 
-        // Save locally
-        try PhotoStorageService.shared.saveImage(image, fileName: fileName)
+        // Save pre-compressed data locally (avoid double JPEG compression)
+        try PhotoStorageService.shared.saveImageData(imageData, fileName: fileName)
 
         return Photo(
             id: photoID,
@@ -72,19 +74,29 @@ final class CloudKitPhotoService {
         let query = CKQuery(recordType: recordType, predicate: predicate)
         query.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: false)]
 
-        let (matchResults, _) = try await database.records(matching: query)
-
         var photos: [Photo] = []
 
+        // First page
+        let (matchResults, cursor) = try await database.records(matching: query)
+
         for (_, result) in matchResults {
-            switch result {
-            case .success(let record):
-                if let photo = try await photoFromRecord(record) {
+            if case .success(let record) = result,
+               let photo = try await photoFromRecord(record) {
+                photos.append(photo)
+            }
+        }
+
+        // Continue fetching if there are more results
+        var nextCursor = cursor
+        while let activeCursor = nextCursor {
+            let (moreResults, moreCursor) = try await database.records(continuingMatchFrom: activeCursor)
+            for (_, result) in moreResults {
+                if case .success(let record) = result,
+                   let photo = try await photoFromRecord(record) {
                     photos.append(photo)
                 }
-            case .failure:
-                continue
             }
+            nextCursor = moreCursor
         }
 
         return photos
@@ -97,7 +109,7 @@ final class CloudKitPhotoService {
               let aspectRatio = record["aspectRatio"] as? Double,
               let bubbleSizeRaw = record["bubbleSize"] as? String,
               let bubbleSize = BubbleSize(rawValue: bubbleSizeRaw) else {
-            print("[CloudKit] Incomplete metadata for record \(record.recordID.recordName)")
+            Self.logger.warning("Incomplete metadata for record \(record.recordID.recordName)")
             return nil
         }
 
@@ -112,10 +124,10 @@ final class CloudKitPhotoService {
                    let image = UIImage(data: imageData) {
                     try? PhotoStorageService.shared.saveImage(image, fileName: fileName)
                 } else {
-                    print("[CloudKit] Failed to read image data for photo \(id)")
+                    Self.logger.error("Failed to read image data for photo \(id)")
                 }
             } else {
-                print("[CloudKit] No asset/fileURL for photo \(id)")
+                Self.logger.warning("No asset/fileURL for photo \(id)")
             }
         }
 
@@ -245,7 +257,7 @@ final class CloudKitPhotoService {
             // Log the error but don't propagate - subscription setup is non-critical
             // This commonly fails with "Field 'recordName' is not marked queryable"
             // when CloudKit Dashboard indexes are not configured
-            print("CloudKit subscription setup failed (non-critical): \(error.localizedDescription)")
+            Self.logger.info("CloudKit subscription setup failed (non-critical): \(error.localizedDescription)")
         }
     }
 

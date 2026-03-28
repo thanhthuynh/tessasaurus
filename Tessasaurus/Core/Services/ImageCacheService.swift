@@ -6,14 +6,21 @@
 import UIKit
 import ImageIO
 
-final class ImageCacheService {
+/// Thread safety: `@unchecked Sendable` is safe here because all mutable state is held in
+/// `NSCache` instances, which are documented as thread-safe for individual get/set operations.
+final class ImageCacheService: @unchecked Sendable {
     static let shared = ImageCacheService()
 
-    private let cache = NSCache<NSString, UIImage>()
+    /// Separate caches prevent full-res images from evicting all thumbnails.
+    private let thumbnailCache = NSCache<NSString, UIImage>()
+    private let fullResCache = NSCache<NSString, UIImage>()
 
     private init() {
-        cache.countLimit = 200
-        cache.totalCostLimit = 50 * 1024 * 1024 // 50 MB (thumbnails are smaller)
+        thumbnailCache.countLimit = 200
+        thumbnailCache.totalCostLimit = 30 * 1024 * 1024 // 30 MB for thumbnails
+
+        fullResCache.countLimit = 10
+        fullResCache.totalCostLimit = 50 * 1024 * 1024 // 50 MB for full-res
 
         NotificationCenter.default.addObserver(
             self,
@@ -28,35 +35,42 @@ final class ImageCacheService {
     }
 
     @objc private func handleMemoryWarning() {
-        cache.removeAllObjects()
+        thumbnailCache.removeAllObjects()
+        fullResCache.removeAllObjects()
     }
 
     func image(forKey key: String) -> UIImage? {
-        cache.object(forKey: key as NSString)
+        fullResCache.object(forKey: key as NSString)
     }
 
     func setImage(_ image: UIImage, forKey key: String) {
-        let cost = Int(image.size.width * image.size.height * image.scale * image.scale * 4)
-        cache.setObject(image, forKey: key as NSString, cost: cost)
+        let cost = imageCost(image)
+        fullResCache.setObject(image, forKey: key as NSString, cost: cost)
     }
 
     func removeImage(forKey key: String) {
-        cache.removeObject(forKey: key as NSString)
+        fullResCache.removeObject(forKey: key as NSString)
+        thumbnailCache.removeObject(forKey: "thumb_\(key)" as NSString)
     }
 
     func setThumbnail(_ image: UIImage, forKey key: String, maxDimension: CGFloat = 300) {
         let thumbnailKey = "thumb_\(key)"
         let downsampled = downsample(image, maxDimension: maxDimension)
-        let cost = Int(downsampled.size.width * downsampled.size.height * downsampled.scale * downsampled.scale * 4)
-        cache.setObject(downsampled, forKey: thumbnailKey as NSString, cost: cost)
+        let cost = imageCost(downsampled)
+        thumbnailCache.setObject(downsampled, forKey: thumbnailKey as NSString, cost: cost)
     }
 
     func thumbnail(forKey key: String) -> UIImage? {
-        cache.object(forKey: "thumb_\(key)" as NSString)
+        thumbnailCache.object(forKey: "thumb_\(key)" as NSString)
     }
 
     func clearCache() {
-        cache.removeAllObjects()
+        thumbnailCache.removeAllObjects()
+        fullResCache.removeAllObjects()
+    }
+
+    private func imageCost(_ image: UIImage) -> Int {
+        Int(image.size.width * image.size.height * image.scale * image.scale * 4)
     }
 
     /// Downsample directly from compressed Data using ImageIO — never allocates the full bitmap.

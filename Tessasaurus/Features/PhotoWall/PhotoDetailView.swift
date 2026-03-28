@@ -18,6 +18,8 @@ struct PhotoDetailView: View {
     @State private var scale: CGFloat = 1.0
     @State private var offset: CGSize = .zero
     @State private var dragOffset: CGSize = .zero
+    @State private var lastPanTranslation: CGSize = .zero
+    @State private var hasTriggeredDismissHaptic = false
     @GestureState private var magnificationState: CGFloat = 1.0
 
     @State private var editedCaption: String = ""
@@ -64,16 +66,14 @@ struct PhotoDetailView: View {
                     bubbleSizeSection
                 }
 
-                if let date = photo.createdAt as Date? {
-                    VStack(spacing: 4) {
-                        Text(date, style: .date)
-                            .font(TessaTypography.caption)
-                            .foregroundStyle(.white.opacity(0.6))
+                VStack(spacing: 4) {
+                    Text(photo.createdAt, style: .date)
+                        .font(TessaTypography.caption)
+                        .foregroundStyle(.white.opacity(0.6))
 
-                        Text(Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date()))
-                            .font(TessaTypography.badge)
-                            .foregroundStyle(TessaColors.textTertiary)
-                    }
+                    Text(Self.relativeDateFormatter.localizedString(for: photo.createdAt, relativeTo: Date()))
+                        .font(TessaTypography.badge)
+                        .foregroundStyle(TessaColors.textTertiary)
                 }
 
                 Spacer()
@@ -93,6 +93,8 @@ struct PhotoDetailView: View {
             scale = 1.0
             offset = .zero
             dragOffset = .zero
+            lastPanTranslation = .zero
+            hasTriggeredDismissHaptic = false
             isEditingCaption = false
             isCaptionFocused = false
             editedCaption = photo.caption ?? ""
@@ -319,17 +321,25 @@ struct PhotoDetailView: View {
                 if scale == 1.0 {
                     dragOffset = value.translation
 
-                    // Haptic when crossing threshold
-                    if abs(value.translation.height) > dismissThreshold &&
-                       abs(value.translation.height - value.predictedEndTranslation.height) < 50 {
+                    // Haptic once when crossing dismiss threshold
+                    if !hasTriggeredDismissHaptic && abs(value.translation.height) > dismissThreshold {
                         haptics.mediumTap()
+                        hasTriggeredDismissHaptic = true
                     }
                 } else {
-                    offset.width += value.translation.width / 10
-                    offset.height += value.translation.height / 10
+                    // Compute delta from last translation (DragGesture delivers cumulative values)
+                    let delta = CGSize(
+                        width: value.translation.width - lastPanTranslation.width,
+                        height: value.translation.height - lastPanTranslation.height
+                    )
+                    offset.width += delta.width
+                    offset.height += delta.height
+                    lastPanTranslation = value.translation
                 }
             }
             .onEnded { value in
+                lastPanTranslation = .zero
+                hasTriggeredDismissHaptic = false
                 if scale == 1.0 {
                     if abs(value.translation.height) > dismissThreshold {
                         onDismiss()

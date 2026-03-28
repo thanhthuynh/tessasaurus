@@ -14,7 +14,6 @@ struct PhotoBubble: View {
     let onTap: () -> Void
 
     @State private var loadedImage: UIImage?
-    @State private var pulseScale: CGFloat = 1.0
     @State private var shimmerRotation: CGFloat = 0
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -31,7 +30,7 @@ struct PhotoBubble: View {
 
     private var glowColor: Color {
         let colors: [Color] = [TessaColors.primary, TessaColors.pink, TessaColors.coral, TessaColors.gold]
-        let index = abs(photo.id.hashValue) % colors.count
+        let index = abs(photo.id.stableHash) % colors.count
         return colors[index]
     }
 
@@ -76,7 +75,7 @@ struct PhotoBubble: View {
             }
         .contentShape(Circle())
         .onTapGesture { onTap() }
-        .scaleEffect(pulseScale * depthScale)
+        .scaleEffect(depthScale)
         .accessibilityLabel(photo.caption ?? "Photo")
         .accessibilityAddTraits(.isButton)
         .task(id: photo.id) {
@@ -87,8 +86,10 @@ struct PhotoBubble: View {
         }
         .onAppear {
             guard !reduceMotion else { return }
-            startIdleAnimation()
             startShimmer()
+        }
+        .onDisappear {
+            shimmerRotation = 0
         }
     }
 
@@ -121,21 +122,6 @@ struct PhotoBubble: View {
             Image(systemName: "photo")
                 .font(.system(size: bubbleSize * 0.3))
                 .foregroundStyle(.white.opacity(0.5))
-        }
-    }
-
-    private func startIdleAnimation() {
-        // Deterministic values seeded from photo.id
-        let hash = abs(photo.id.hashValue)
-        let duration = 2.5 + Double(hash % 100) / 100.0
-        let delay = Double((hash >> 8) % 100) / 100.0
-
-        withAnimation(
-            .easeInOut(duration: duration)
-            .repeatForever(autoreverses: true)
-            .delay(delay)
-        ) {
-            pulseScale = 1.02
         }
     }
 

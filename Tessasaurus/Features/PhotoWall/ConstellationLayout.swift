@@ -4,15 +4,17 @@
 //
 
 import CoreGraphics
+import Foundation
 
 struct PlacedBubble: Identifiable {
+    let photoID: UUID
     let index: Int
     var position: CGPoint
     let ringIndex: Int
     let angleInRing: CGFloat
     let bubbleScale: CGFloat
 
-    var id: Int { index }
+    var id: UUID { photoID }
 }
 
 enum ConstellationLayout {
@@ -47,6 +49,7 @@ enum ConstellationLayout {
         if placementIndex < sortedIndices.count {
             let originalIndex = sortedIndices[placementIndex]
             placements.append(PlacedBubble(
+                photoID: photos[originalIndex].id,
                 index: originalIndex,
                 position: .zero,
                 ringIndex: 0,
@@ -68,8 +71,8 @@ enum ConstellationLayout {
                 let originalIndex = sortedIndices[placementIndex]
                 let baseAngle = (CGFloat.pi * 2.0 * CGFloat(slot)) / CGFloat(photosInRing)
 
-                // Deterministic jitter seeded by original index
-                let seed = Double(originalIndex * 73856093 ^ originalIndex * 19349663)
+                // Deterministic jitter seeded by original index (overflow-safe)
+                let seed = Double(originalIndex &* 73856093 ^ originalIndex &* 19349663)
                 let jitterAngle = CGFloat(sin(seed) * 0.15)
                 let jitterRadius = CGFloat(cos(seed * 1.3) * 12)
 
@@ -80,6 +83,7 @@ enum ConstellationLayout {
                 let y = sin(angle) * radius
 
                 placements.append(PlacedBubble(
+                    photoID: photos[originalIndex].id,
                     index: originalIndex,
                     position: CGPoint(x: x, y: y),
                     ringIndex: ring,

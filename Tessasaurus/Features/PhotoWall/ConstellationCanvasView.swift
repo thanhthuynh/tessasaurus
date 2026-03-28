@@ -24,6 +24,7 @@ struct ConstellationCanvasView: View {
     // Drag tracking
     @State private var dragStartOffset: CGPoint? = nil
 
+    @AppStorage("hasCompletedOnboarding") private var onboardingCompleted = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let baseBubbleSize: CGFloat = 100
@@ -48,7 +49,7 @@ struct ConstellationCanvasView: View {
             let viewCenter = CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2)
 
             ZStack {
-                StarfieldBackground(canvasOffset: canvasOffset, canvasScale: canvasScale)
+                StarfieldBackground(canvasOffset: canvasOffset)
 
                 ConstellationLinesView(
                     edges: cachedEdges,
@@ -61,8 +62,7 @@ struct ConstellationCanvasView: View {
                 .drawingGroup()
 
                 ForEach(cachedPlacements) { placement in
-                    if placement.index < photos.count {
-                        let photo = photos[placement.index]
+                    if let photo = photos.first(where: { $0.id == placement.photoID }) {
                         let screenPos = screenPosition(for: placement.position, center: viewCenter)
 
                         // Visibility culling
@@ -109,22 +109,21 @@ struct ConstellationCanvasView: View {
             .simultaneousGesture(magnifyGesture(anchor: viewCenter))
             .onAppear {
                 recomputeLayout()
-                let onboardingDone = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
-                if onboardingDone && !hasFannedOut && !photos.isEmpty {
+                if onboardingCompleted && !hasFannedOut && !photos.isEmpty {
                     performFanOut()
                 }
             }
             .onChange(of: photosIdentity) { _, _ in
                 recomputeLayout()
-                let onboardingDone = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
-                if onboardingDone && !hasFannedOut && !photos.isEmpty {
+                if onboardingCompleted && !hasFannedOut && !photos.isEmpty {
                     performFanOut()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .onboardingWillDismiss)) { _ in
                 guard !hasFannedOut else { return }
                 // Delay 0.5s so fan-out starts ~33% into the 1.5s dissolve
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                Task {
+                    try? await Task.sleep(for: .milliseconds(500))
                     if !hasFannedOut {
                         performFanOut()
                     }
@@ -194,13 +193,14 @@ struct ConstellationCanvasView: View {
     private func dragGesture(viewportSize: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 5)
             .onChanged { value in
+                let startOffset = dragStartOffset ?? canvasOffset
                 if dragStartOffset == nil {
                     dragStartOffset = canvasOffset
                 }
 
                 let newOffset = CGPoint(
-                    x: dragStartOffset!.x + value.translation.width,
-                    y: dragStartOffset!.y + value.translation.height
+                    x: startOffset.x + value.translation.width,
+                    y: startOffset.y + value.translation.height
                 )
 
                 let bounds = scaledBounds()

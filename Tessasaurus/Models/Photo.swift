@@ -33,17 +33,18 @@ enum BubbleSize: String, Codable, CaseIterable {
         // Near-square photos (0.85–1.15 aspect ratio) get a size bump
         let isNearSquare = aspectRatio >= 0.85 && aspectRatio <= 1.15
 
-        // Deterministic weighted distribution seeded from current count
-        let hash = abs(photoCount.hashValue) % 100
+        // Deterministic distribution using stable modular arithmetic (not hashValue)
+        let seed = photoCount &* 2654435761 // Knuth multiplicative hash, overflow-safe
+        let bucket = (seed & 0x7FFFFFFF) % 100 // mask sign bit, then mod
         if isNearSquare {
             // Bump: 35% large, 40% medium, 25% small
-            if hash < 35 { return .large }
-            else if hash < 75 { return .medium }
+            if bucket < 35 { return .large }
+            else if bucket < 75 { return .medium }
             else { return .small }
         } else {
             // 25% large, 45% medium, 30% small
-            if hash < 25 { return .large }
-            else if hash < 70 { return .medium }
+            if bucket < 25 { return .large }
+            else if bucket < 70 { return .medium }
             else { return .small }
         }
     }
@@ -92,7 +93,21 @@ struct Photo: Identifiable, Codable, Equatable {
     }
 
     static func == (lhs: Photo, rhs: Photo) -> Bool {
-        lhs.id == rhs.id && lhs.caption == rhs.caption && lhs.bubbleSize == rhs.bubbleSize
+        lhs.id == rhs.id &&
+        lhs.caption == rhs.caption &&
+        lhs.bubbleSize == rhs.bubbleSize &&
+        lhs.localFileName == rhs.localFileName &&
+        lhs.aspectRatio == rhs.aspectRatio
+    }
+}
+
+extension UUID {
+    /// Stable hash derived from the first 8 UUID bytes — unlike `hashValue`, this is deterministic
+    /// across launches. Uses only bytes 0-7 (sufficient for color/layout distribution).
+    var stableHash: Int {
+        let (a, b, c, d, e, f, g, h, _, _, _, _, _, _, _, _) = uuid
+        return (Int(a) &<< 24 | Int(b) &<< 16 | Int(c) &<< 8 | Int(d))
+            ^ (Int(e) &<< 24 | Int(f) &<< 16 | Int(g) &<< 8 | Int(h))
     }
 }
 

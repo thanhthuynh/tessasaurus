@@ -33,6 +33,7 @@ struct AddPhotoSheet: View {
     @State private var selectedImages: [SelectedPhoto] = []
     @State private var isLoadingImages = false
     @State private var loadingTask: Task<Void, Never>?
+    @State private var uploadTask: Task<Void, Never>?
     @FocusState private var focusedCaptionID: UUID?
 
     private var loadedCount: Int {
@@ -70,6 +71,8 @@ struct AddPhotoSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         loadingTask?.cancel()
+                        uploadTask?.cancel()
+                        viewModel.cancelUpload()
                         dismiss()
                     }
                     .foregroundStyle(TessaColors.textPrimary)
@@ -272,11 +275,10 @@ struct AddPhotoSheet: View {
 
     private func removePhoto(_ photo: SelectedPhoto) {
         selectedImages.removeAll { $0.id == photo.id }
-        selectedItems = []
     }
 
     private func uploadPhotos() {
-        Task {
+        uploadTask = Task {
             // Mark all as uploading
             for index in selectedImages.indices {
                 selectedImages[index].uploadState = .uploading
@@ -291,6 +293,8 @@ struct AddPhotoSheet: View {
 
             // Upload one photo at a time to keep peak memory low
             for (index, photo) in selectedImages.enumerated() {
+                guard !Task.isCancelled else { break }
+
                 guard let data = photo.imageData,
                       let fullImage = UIImage(data: data) else {
                     selectedImages[index].uploadState = .failed
@@ -304,7 +308,6 @@ struct AddPhotoSheet: View {
                     aspectRatio: CGFloat(fullImage.size.width / fullImage.size.height)
                 )
                 let success = await viewModel.uploadSinglePhoto(image: fullImage, caption: caption, size: autoSize)
-                // fullImage released after this scope
 
                 if success {
                     selectedImages[index].uploadState = .success
@@ -316,18 +319,21 @@ struct AddPhotoSheet: View {
                 viewModel.uploadProgress = Double(index + 1) / Double(totalCount)
             }
 
+            guard !Task.isCancelled else { return }
+
             await viewModel.finalizeUpload()
 
             if totalFailure == 0 {
                 HapticService.shared.success()
-                try? await Task.sleep(nanoseconds: 400_000_000)
+                try? await Task.sleep(for: .milliseconds(400))
+                guard !Task.isCancelled else { return }
                 dismiss()
             } else if totalSuccess > 0 {
                 HapticService.shared.warning()
-                try? await Task.sleep(nanoseconds: 600_000_000)
+                try? await Task.sleep(for: .milliseconds(600))
+                guard !Task.isCancelled else { return }
                 // Remove succeeded, keep failed
                 selectedImages = selectedImages.filter { $0.uploadState != .success }
-                selectedItems = []
             } else {
                 HapticService.shared.warning()
             }

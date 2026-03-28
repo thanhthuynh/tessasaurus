@@ -59,6 +59,12 @@ nonisolated final class PhotoStorageService: @unchecked Sendable {
         try data.write(to: fileURL)
     }
 
+    /// Save pre-compressed image data directly, avoiding double JPEG compression.
+    func saveImageData(_ data: Data, fileName: String) throws {
+        let fileURL = photosDirectory.appendingPathComponent(fileName)
+        try data.write(to: fileURL)
+    }
+
     func loadImage(fileName: String) -> UIImage? {
         let fileURL = photosDirectory.appendingPathComponent(fileName)
 
@@ -135,7 +141,7 @@ nonisolated final class PhotoStorageService: @unchecked Sendable {
 
     func savePhotosMetadata(_ photos: [Photo]) throws {
         let data = try JSONEncoder().encode(photos)
-        try data.write(to: metadataURL)
+        try data.write(to: metadataURL, options: .atomic)
     }
 
     func loadPhotosMetadata() -> [Photo] {

@@ -9,17 +9,21 @@ struct PhotoWallView: View {
     @Binding var showTabBar: Bool
     @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel = PhotoWallViewModel()
-    @State private var selectedPhoto: Photo?
+    @State private var selectedPhotoID: UUID?
     @State private var showAddPhotoSheet = false
-    @State private var showDeleteAllConfirmation = false
     @State private var isSelectingPhoto = false
+
+    /// Derives the selected photo from the viewModel's canonical array — single source of truth.
+    private var selectedPhoto: Photo? {
+        guard let id = selectedPhotoID else { return nil }
+        return viewModel.photos.first { $0.id == id }
+    }
 
     var body: some View {
         ZStack {
             if viewModel.photos.isEmpty && !viewModel.isLoading {
-                // Empty state with cosmic background
                 ZStack {
-                    StarfieldBackground(canvasOffset: .zero, canvasScale: 1.0)
+                    StarfieldBackground(canvasOffset: .zero)
                     emptyState
                 }
                 .ignoresSafeArea()
@@ -28,18 +32,16 @@ struct PhotoWallView: View {
                     .ignoresSafeArea()
             }
 
-            // Floating header overlay
             VStack {
                 header
                 Spacer()
             }
 
-            // Floating add button (uploader mode only)
             if viewModel.isUploaderMode {
                 addButton
             }
 
-            // Photo detail overlay
+            // Photo detail overlay — always derived from viewModel.photos
             if let photo = selectedPhoto {
                 PhotoDetailView(
                     photo: photo,
@@ -49,22 +51,21 @@ struct PhotoWallView: View {
                     onDismiss: {
                         isSelectingPhoto = true
                         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                            selectedPhoto = nil
+                            selectedPhotoID = nil
                         }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        // Reset after animation completes
+                        Task {
+                            try? await Task.sleep(for: .milliseconds(500))
                             isSelectingPhoto = false
                         }
                     },
                     onUpdateCaption: { newCaption in
-                        selectedPhoto?.caption = newCaption
+                        // Update via viewModel (single source of truth)
                         Task {
                             await viewModel.updateCaption(for: photo, newCaption: newCaption)
                         }
                     },
                     onUpdateBubbleSize: { newSize in
-                        withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) {
-                            selectedPhoto?.bubbleSize = newSize
-                        }
                         Task {
                             await viewModel.updateBubbleSize(for: photo, newSize: newSize)
                         }
@@ -73,7 +74,6 @@ struct PhotoWallView: View {
                 .transition(.opacity)
             }
 
-            // Loading overlay
             if viewModel.isLoading && viewModel.photos.isEmpty {
                 loadingOverlay
             }
@@ -89,39 +89,12 @@ struct PhotoWallView: View {
         } message: {
             Text(viewModel.errorMessage ?? "An error occurred")
         }
-        // TEMPORARY: Delete All confirmation (remove after use)
-        .confirmationDialog(
-            "Delete All Photos?",
-            isPresented: $showDeleteAllConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Delete All", role: .destructive) {
-                Task { await viewModel.deleteAllPhotos() }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This will permanently delete all photos from CloudKit and local storage. This cannot be undone.")
-        }
-        .overlay {
-            if viewModel.isDeletingAll, let progress = viewModel.deleteAllProgress {
-                VStack(spacing: 16) {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    Text(progress)
-                        .font(TessaTypography.detail)
-                        .foregroundStyle(.white)
-                }
-                .padding(24)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-            }
-        }
-        // END TEMPORARY
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 Task { await viewModel.refresh() }
             }
         }
-        .onChange(of: selectedPhoto) { _, newValue in
+        .onChange(of: selectedPhotoID) { _, newValue in
             withAnimation {
                 showTabBar = newValue == nil
             }
@@ -164,15 +137,6 @@ struct PhotoWallView: View {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
 
-                    Divider()
-
-                    // TEMPORARY: Delete All Photos (remove after use)
-                    Button(role: .destructive) {
-                        showDeleteAllConfirmation = true
-                    } label: {
-                        Label("Delete All Photos", systemImage: "trash")
-                    }
-                    .disabled(viewModel.isDeletingAll)
                 } label: {
                     Image(systemName: "gearshape.fill")
                         .font(.title3)
@@ -207,9 +171,10 @@ struct PhotoWallView: View {
                 guard !isSelectingPhoto else { return }
                 isSelectingPhoto = true
                 withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                    selectedPhoto = photo
+                    selectedPhotoID = photo.id
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                Task {
+                    try? await Task.sleep(for: .milliseconds(300))
                     isSelectingPhoto = false
                 }
             },
@@ -246,6 +211,7 @@ struct PhotoWallView: View {
                                 .shadow(color: TessaColors.primary.opacity(0.3), radius: 10, x: 0, y: 5)
                         )
                 }
+                .accessibilityLabel("Add photos")
                 .padding(.trailing, 24)
                 .padding(.bottom, 90) // Above floating tab bar
             }

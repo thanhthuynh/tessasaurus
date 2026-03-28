@@ -7,8 +7,12 @@ import SwiftUI
 
 @Observable
 final class CouponsViewModel {
-    private let persistenceService = PersistenceService()
+    private let persistenceService: PersistenceService
     private let hapticService = HapticService.shared
+
+    init(persistenceService: PersistenceService = PersistenceService()) {
+        self.persistenceService = persistenceService
+    }
 
     var coupons = Coupon.allCoupons
     var selectedCoupon: Coupon?
