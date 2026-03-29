@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-28 | Files scanned: 33 | Token estimate: ~900 -->
+<!-- Generated: 2026-03-30 | Files scanned: 38 | Token estimate: ~900 -->
 
 # Architecture
 
@@ -6,6 +6,7 @@
 
 ```
 TessasaurusApp (@main)
+  ├── AppDelegate → FirebaseApp.configure()
   ├── OnboardingView (overlay, gated by @AppStorage "hasCompletedOnboarding")
   └── ContentView
       ├── PhotoWallView       [tab 0, opacity-switched]
@@ -16,11 +17,15 @@ TessasaurusApp (@main)
 ## Data Flow
 
 ```
-CloudKit (publicCloudDatabase)
-  └── CloudKitPhotoService.shared
-        ├── fetchAllPhotos() → paginated CKQuery with cursor
-        ├── uploadPhoto()    → CKRecord + CKAsset
-        └── subscribeToChanges() → push → AppDelegate → .photosDidUpdate notification
+Firebase (Firestore + Firebase Storage)
+  └── FirebasePhotoService.shared
+        ├── ensureAuthenticated() → anonymous sign-in (Auth.auth)
+        ├── fetchAllPhotos()      → Firestore query ordered by createdAt desc
+        ├── uploadPhoto()         → Storage.putDataAsync + Firestore.setData
+        ├── startListening()      → Firestore addSnapshotListener (delta sync)
+        ├── deletePhoto()         → Firestore.delete + Storage.delete
+        ├── updatePhotoCaption()  → Firestore.updateData
+        └── updatePhotoBubbleSize() → Firestore.updateData
 
 PhotoStorageService.shared
   ├── Documents/Photos/<uuid>.jpg        (full-res)
@@ -35,14 +40,14 @@ Image Loading (PhotoWallViewModel.loadImageAsync):
   1. Memory thumbnail cache  → instant
   2. Disk thumbnail          → Task.detached
   3. Disk full-res           → Task.detached + generate thumbnail
-  4. CloudKit fetch          → network fallback
+  4. Firebase Storage fetch  → network fallback
 ```
 
 ## Service Dependencies
 
 ```
 PhotoWallViewModel
-  ├── CloudKitPhotoService.shared
+  ├── FirebasePhotoService.shared
   ├── PhotoStorageService.shared
   ├── ImageCacheService.shared
   └── UserDefaults (isUploaderMode)
@@ -51,15 +56,30 @@ CouponsViewModel
   ├── PersistenceService (injected)
   └── HapticService.shared
 
-CloudKitPhotoService → PhotoStorageService (saves downloaded images)
+FirebasePhotoService → PhotoStorageService (saves downloaded images locally)
+FirebasePhotoService → FirebaseAuth (anonymous sign-in before any network op)
+```
+
+## Firebase Error Types
+
+```
+FirebasePhotoError (LocalizedError)
+  ├── imageCompressionFailed
+  ├── notAuthenticated
+  ├── uploadFailed(message: String)
+  ├── downloadFailed(message: String)
+  └── serviceUnavailable
 ```
 
 ## Key Patterns
 
 - `@Observable` + `@MainActor` on async ViewModels
 - Singleton services via `static let shared`
+- Firebase anonymous auth — invisible to user, fires on first `loadPhotos()`
+- Firestore snapshot listener for real-time delta sync (added/modified/removed)
+- Optimistic updates with rollback on Firebase failure
 - ID-based selection (`selectedPhotoID: UUID?`, derive object from array)
 - `os.Logger` for structured logging
 - `UUID.stableHash` for deterministic per-launch-stable hashing
 - DI via init params with defaults for testability
-- Optimistic updates with rollback on CloudKit failure
+- No APNs or CloudKit entitlements

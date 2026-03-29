@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-28 | Files scanned: 33 | Token estimate: ~700 -->
+<!-- Generated: 2026-03-30 | Files scanned: 38 | Token estimate: ~700 -->
 
 # Features
 
@@ -18,15 +18,24 @@ PhotoWallView (269 lines)
       ├── PhotosPicker (max 10), concurrent thumbnail generation
       └── sequential upload via viewModel.uploadSinglePhoto()
 
-PhotoWallViewModel (390 lines)
+PhotoWallViewModel (370 lines)
   State: photos[], isLoading, isUploading, uploadProgress, errorMessage, showError, isUploaderMode
   Key methods:
-    loadPhotos()        → CK account check → fetch → save metadata → subscribe
-    loadImageAsync()    → 4-tier cache cascade (memory → disk thumb → disk full → CK)
-    uploadSinglePhoto() → CK upload + local save + cache
-    updateCaption()     → optimistic update + CK save + rollback on failure
-    updateBubbleSize()  → optimistic update + CK save + rollback on failure
-    deletePhoto()       → CK delete + cache eviction + metadata save
+    loadPhotos()          → ensureAuthenticated → fetchAllPhotos → save metadata → startRealtimeSync
+    loadImageAsync()      → 4-tier cache cascade (memory → disk thumb → disk full → Firebase Storage)
+    uploadSinglePhoto()   → FirebasePhotoService.uploadPhoto + local cache write
+    uploadPhotos()        → batch upload with per-item progress tracking
+    finalizeUpload()      → persist metadata, clear upload state, deferred refresh
+    cancelUpload()        → reset isUploading + uploadProgress immediately
+    updateCaption()       → optimistic update + Firestore updateData + rollback on error
+    updateBubbleSize()    → optimistic update + Firestore updateData + rollback on error
+    deletePhoto()         → Firebase delete + cache eviction + metadata persist
+    startRealtimeSync()   → Firestore addSnapshotListener (called once after initial fetch)
+    applyChanges()        → processes [PhotoChange] deltas (.added/.modified/.removed) into photos[]
+    toggleUploaderMode()  → UserDefaults persist
+
+  PhotoChange enum (from FirebasePhotoService):
+    .added(Photo) | .modified(Photo) | .removed(String)  ← docID on removal
 
 ConstellationLayout
     calculatePositions() → sort by size → ring placement → jitter → collision resolution

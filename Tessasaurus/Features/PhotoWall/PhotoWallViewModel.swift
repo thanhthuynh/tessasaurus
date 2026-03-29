@@ -4,7 +4,6 @@
 //
 
 import SwiftUI
-import CloudKit
 import Observation
 import os
 
@@ -23,7 +22,7 @@ final class PhotoWallViewModel {
     var errorMessage: String?
     var showError = false
     var isUploaderMode = false
-    private let cloudService = CloudKitPhotoService.shared
+    private let photoService = FirebasePhotoService.shared
     private let storageService = PhotoStorageService.shared
     private let cacheService = ImageCacheService.shared
 
@@ -34,29 +33,11 @@ final class PhotoWallViewModel {
 
     private var needsRefreshAfterUpload = false
     private var inFlightLoads: [UUID: Task<UIImage?, Never>] = [:]
-    // nonisolated(unsafe) is acceptable here: the property is written exactly once in init()
-    // (which completes synchronously on @MainActor before any other access is possible) and
-    // read only in deinit (for cancellation). The Task uses [weak self] and checks isCancelled.
-    nonisolated(unsafe) private var notificationTask: Task<Void, Never>?
+    private var listenerActive = false
 
     init() {
         isUploaderMode = UserDefaults.standard.bool(forKey: uploaderModeKey)
         loadCachedPhotos()
-        startNotificationObserver()
-    }
-
-    deinit {
-        notificationTask?.cancel()
-    }
-
-    private func startNotificationObserver() {
-        notificationTask = Task { [weak self] in
-            let notifications = NotificationCenter.default.notifications(named: .photosDidUpdate)
-            for await _ in notifications {
-                guard let self, !Task.isCancelled else { break }
-                await self.refresh()
-            }
-        }
     }
 
     // MARK: - Public Methods
@@ -73,40 +54,21 @@ final class PhotoWallViewModel {
         isLoading = true
 
         do {
-            // Check iCloud account status
-            let status = try await cloudService.checkAccountStatus()
-            guard status == .available else {
-                switch status {
-                case .noAccount:
-                    errorMessage = "Sign in to iCloud in Settings to sync photos"
-                case .restricted:
-                    errorMessage = "iCloud access is restricted on this device"
-                case .temporarilyUnavailable:
-                    errorMessage = "iCloud is temporarily unavailable. Please try again later."
-                case .couldNotDetermine:
-                    errorMessage = "Unable to determine iCloud status. Check your internet connection."
-                default:
-                    errorMessage = "iCloud is not available. Please check Settings."
-                }
-                showError = true
-                isLoading = false
-                return
-            }
+            try await photoService.ensureAuthenticated()
 
-            // Fetch from CloudKit
-            let cloudPhotos = try await cloudService.fetchAllPhotos()
+            let fetchedPhotos = try await photoService.fetchAllPhotos()
 
             // Update local cache
             do {
-                try storageService.savePhotosMetadata(cloudPhotos)
+                try storageService.savePhotosMetadata(fetchedPhotos)
             } catch {
                 Self.logger.error("Failed to save photo metadata: \(error.localizedDescription)")
             }
 
-            photos = cloudPhotos
+            photos = fetchedPhotos
 
-            // Subscribe to changes if not already (non-throwing, logs errors internally)
-            await cloudService.subscribeToChanges()
+            // Start real-time listener for delta sync
+            startRealtimeSync()
 
         } catch {
             handleError(error)
@@ -126,7 +88,7 @@ final class PhotoWallViewModel {
 
         for (index, (image, caption, size)) in images.enumerated() {
             do {
-                let photo = try await cloudService.uploadPhoto(
+                let photo = try await photoService.uploadPhoto(
                     image: image,
                     caption: caption,
                     bubbleSize: size
@@ -171,7 +133,7 @@ final class PhotoWallViewModel {
     /// Caller is responsible for batch state management.
     func uploadSinglePhoto(image: UIImage, caption: String?, size: BubbleSize) async -> Bool {
         do {
-            let photo = try await cloudService.uploadPhoto(
+            let photo = try await photoService.uploadPhoto(
                 image: image,
                 caption: caption,
                 bubbleSize: size
@@ -210,7 +172,7 @@ final class PhotoWallViewModel {
 
     func deletePhoto(_ photo: Photo) async {
         do {
-            try await cloudService.deletePhoto(photo)
+            try await photoService.deletePhoto(photo)
 
             photos.removeAll { $0.id == photo.id }
 
@@ -235,7 +197,7 @@ final class PhotoWallViewModel {
             photos[index].bubbleSize = newSize
         }
         do {
-            try await cloudService.updatePhotoBubbleSize(photo, newSize: newSize)
+            try await photoService.updatePhotoBubbleSize(photo, newSize: newSize)
             do {
                 try storageService.savePhotosMetadata(photos)
             } catch {
@@ -257,7 +219,7 @@ final class PhotoWallViewModel {
             photos[index].caption = newCaption
         }
         do {
-            try await cloudService.updatePhotoCaption(photo, newCaption: newCaption)
+            try await photoService.updatePhotoCaption(photo, newCaption: newCaption)
             do {
                 try storageService.savePhotosMetadata(photos)
             } catch {
@@ -319,16 +281,15 @@ final class PhotoWallViewModel {
                 return self.cacheService.thumbnail(forKey: photoKey) ?? diskImage
             }
 
-            // 4. Fallback: CloudKit
+            // 4. Fallback: Firebase Storage
             do {
-                if let cloudImage = try await self.cloudService.fetchImageForPhoto(photo) {
-                    self.cacheService.setThumbnail(cloudImage, forKey: photoKey)
-                    self.cacheService.setImage(cloudImage, forKey: photoKey)
-                    // Return directly instead of force-unwrapping from cache
-                    return self.cacheService.thumbnail(forKey: photoKey) ?? cloudImage
+                if let remoteImage = try await self.photoService.fetchImageForPhoto(photo) {
+                    self.cacheService.setThumbnail(remoteImage, forKey: photoKey)
+                    self.cacheService.setImage(remoteImage, forKey: photoKey)
+                    return self.cacheService.thumbnail(forKey: photoKey) ?? remoteImage
                 }
             } catch {
-                Self.logger.error("CloudKit fallback failed for photo \(photoId): \(error.localizedDescription)")
+                Self.logger.error("Firebase fallback failed for photo \(photoId): \(error.localizedDescription)")
             }
 
             return nil
@@ -358,29 +319,48 @@ final class PhotoWallViewModel {
         }
     }
 
+    private func startRealtimeSync() {
+        guard !listenerActive else { return }
+        listenerActive = true
+
+        photoService.startListening { [weak self] changes in
+            guard let self else { return }
+            self.applyChanges(changes)
+        }
+    }
+
+    private func applyChanges(_ changes: [PhotoChange]) {
+        for change in changes {
+            switch change {
+            case .added(let photo):
+                if !photos.contains(where: { $0.id == photo.id }) {
+                    photos.insert(photo, at: 0)
+                }
+            case .modified(let photo):
+                if let index = photos.firstIndex(where: { $0.id == photo.id }) {
+                    photos[index] = photo
+                }
+            case .removed(let docID):
+                photos.removeAll { $0.id.uuidString == docID }
+            }
+        }
+        // Persist updated metadata
+        try? storageService.savePhotosMetadata(photos)
+    }
+
     private func handleError(_ error: Error) {
-        if let ckError = error as? CKError {
-            switch ckError.code {
-            case .networkUnavailable, .networkFailure:
-                errorMessage = "No internet connection. Please check your network and try again."
+        if let firebaseError = error as? FirebasePhotoError {
+            switch firebaseError {
+            case .imageCompressionFailed:
+                errorMessage = "Failed to compress image for upload."
             case .notAuthenticated:
-                errorMessage = "Sign in to iCloud in Settings to sync photos."
-            case .permissionFailure:
-                errorMessage = "iCloud permission denied. Check iCloud Drive is enabled in Settings."
-            case .quotaExceeded:
-                errorMessage = "iCloud storage is full. Free up space to continue syncing."
-            case .serviceUnavailable, .requestRateLimited:
-                errorMessage = "iCloud is busy. Please try again in a moment."
-            case .zoneBusy:
-                errorMessage = "iCloud is processing changes. Please try again shortly."
-            case .incompatibleVersion:
-                errorMessage = "Please update the app to the latest version."
-            case .assetFileNotFound, .assetNotAvailable:
-                errorMessage = "Photo data is unavailable. Try refreshing."
-            case .serverResponseLost:
-                errorMessage = "Connection to iCloud was interrupted. Please try again."
-            default:
-                errorMessage = "iCloud error: \(ckError.localizedDescription)"
+                errorMessage = "Unable to connect to the photo service. Please try again."
+            case .serviceUnavailable:
+                errorMessage = "Photo service is temporarily unavailable. Please try again later."
+            case .uploadFailed:
+                errorMessage = "Failed to upload photo. Please check your connection."
+            case .downloadFailed:
+                errorMessage = "Failed to download photo. Please check your connection."
             }
         } else {
             errorMessage = error.localizedDescription

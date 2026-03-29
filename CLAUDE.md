@@ -49,7 +49,7 @@ xcrun simctl list devices available
 ### Project File Tree
 ```
 Tessasaurus/
-├── TessasaurusApp.swift                    # App entry point (@main) + AppDelegate (push notifications)
+├── TessasaurusApp.swift                    # App entry point (@main) + AppDelegate (FirebaseApp.configure)
 ├── ContentView.swift                        # Root view — FloatingTabBar + opacity-based tab switching
 ├── Info.plist
 ├── Tessasaurus.entitlements
@@ -70,7 +70,7 @@ Tessasaurus/
 │   │   ├── ShimmerModifier.swift            # Shimmer loading effect
 │   │   └── GradientBackground.swift         # Reusable gradient background
 │   └── Services/
-│       ├── CloudKitPhotoService.swift        # iCloud photo sync (singleton, publicCloudDatabase)
+│       ├── FirebasePhotoService.swift        # Firebase photo sync (Firestore metadata + Storage images, singleton)
 │       ├── PhotoStorageService.swift         # Local photo/thumbnail storage (singleton)
 │       ├── ImageCacheService.swift           # Split thumbnail/full-res image cache (singleton)
 │       ├── HapticService.swift              # Haptic feedback patterns (singleton)
@@ -81,7 +81,7 @@ Tessasaurus/
 └── Features/
     ├── PhotoWall/
     │   ├── PhotoWallView.swift              # Main photo constellation UI
-    │   ├── PhotoWallViewModel.swift         # @Observable @MainActor VM (CloudKit async)
+    │   ├── PhotoWallViewModel.swift         # @Observable @MainActor VM (Firebase async + Firestore listener)
     │   ├── ConstellationCanvasView.swift    # Zoomable/pannable canvas with fan-out animation
     │   ├── ConstellationLayout.swift        # Ring-based layout with collision resolution
     │   ├── ConstellationLinesView.swift     # Connecting lines between photos (Canvas)
@@ -112,11 +112,11 @@ TessasaurusUITests/
 
 1. **`@Observable` macro** (NOT `ObservableObject`/`@Published`) — `PhotoWallViewModel.swift:16`, `CouponsViewModel.swift:8`
 
-2. **`@MainActor` on ViewModels with async/CloudKit work** — `PhotoWallViewModel.swift:17` uses `@MainActor` because it does async CloudKit operations. Lighter VMs like `CouponsViewModel` omit it.
+2. **`@MainActor` on ViewModels with async/Firebase work** — `PhotoWallViewModel.swift:17` uses `@MainActor` because it does async Firebase operations. Lighter VMs like `CouponsViewModel` omit it.
 
 3. **Singleton services via `static let shared`** — All services use this pattern:
    - `HapticService.shared` — `HapticService.swift:9`
-   - `CloudKitPhotoService.shared` — `CloudKitPhotoService.swift:11`
+   - `FirebasePhotoService.shared` — `FirebasePhotoService.swift:45`
    - `PhotoStorageService.shared` — `PhotoStorageService.swift:9`
    - `ImageCacheService.shared` — `ImageCacheService.swift:12`
 
@@ -130,7 +130,7 @@ TessasaurusUITests/
 
 8. **Haptic feedback via `HapticService.shared`** for user interactions — `CouponsViewModel.swift:48,54,63`, `PhotoWallView.swift:197`
 
-9. **Structured logging via `os.Logger`** — Use `Logger(subsystem:category:)` instead of `print()`. See `PhotoWallViewModel.swift:30`, `CloudKitPhotoService.swift:12`.
+9. **Structured logging via `os.Logger`** — Use `Logger(subsystem:category:)` instead of `print()`. See `PhotoWallViewModel.swift:30`, `FirebasePhotoService.swift:46`.
 
 10. **ID-based selection** — Use `selectedPhotoID: UUID?` and derive the object from the canonical array, not a copy. See `PhotoWallView.swift:12-20`.
 
@@ -207,7 +207,7 @@ Launch **both** agents in a **single message** using parallel tool calls.
 > Create a file-by-file change plan covering:
 > 1. Files to create/modify/delete
 > 2. State management approach (which VM, @Observable, @MainActor decision)
-> 3. Service layer changes (singleton pattern, CloudKit, persistence)
+> 3. Service layer changes (singleton pattern, Firebase, persistence)
 > 4. Data flow: how data moves from source → ViewModel → View
 > 5. Dependencies between changes (ordering)
 > 6. Error handling following the errorMessage/showError pattern
